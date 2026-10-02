@@ -22,7 +22,7 @@ python tools/run_random_validation.py --count 100 --seed 20261002 `
   --output-dir results/external_validation
 ```
 
-각도 스윕에는 `--angle-sweep --angle-step 4`를 추가한다. 스윕은 선택된 방향에서 기본적으로 0°부터 `MAX_ANGLE_DEG`까지 탐색하고 선택각을 반드시 포함한다. 표본 실험에서는 `--angle-max`로 상한을 줄일 수 있다. `--layer-height`, `--selector-k`, `--max-generation-retries`, `--volco-voxel-size` 등을 조정할 수 있다. 100개와 VOLCO 전체 스윕은 상당한 시간과 디스크를 쓸 수 있으므로, 먼저 `--count 1`로 환경을 확인하는 것이 좋다.
+각도 스윕에는 `--angle-sweep --angle-step 4`를 추가한다. 스윕은 선택된 방향에서 기본적으로 0°부터 `MAX_ANGLE_DEG`까지 탐색하고 선택각을 반드시 포함한다. 표본 실험에서는 `--angle-max`로 상한을 줄일 수 있다. `--layer-height`, `--selector-k`, `--max-generation-retries`, `--volco-voxel-size` 등을 조정할 수 있다. VOLCO의 기본 voxel 크기는 압출 폭 0.45 mm를 약 4.5 voxel로 표현하는 0.1 mm이다. 100개와 VOLCO 전체 스윕은 상당한 시간과 디스크를 쓸 수 있으므로, 먼저 `--count 1`로 환경을 확인하는 것이 좋다.
 
 ## 실제 검사 범위와 독립성
 

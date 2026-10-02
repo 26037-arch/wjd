@@ -290,7 +290,7 @@ def main(argv=None):
     p.add_argument("--multi-axis-dir", default=os.environ.get("MULTI_AXIS_DIR"))
     p.add_argument("--geometry-validator", choices=["volco"])
     p.add_argument("--volco-dir", default=os.environ.get("VOLCO_DIR"))
-    p.add_argument("--volco-voxel-size", type=float, default=0.5)
+    p.add_argument("--volco-voxel-size", type=float, default=0.1)
     p.add_argument("--angle-sweep", action="store_true")
     p.add_argument("--angle-step", type=int, default=4)
     p.add_argument("--angle-max", type=int, default=MAX_ANGLE_DEG)

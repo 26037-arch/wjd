@@ -150,7 +150,7 @@ def builtin_mesh_check(mesh):
 
 
 def validate_volco(gcode_path, original_mesh, output_dir, repo_path,
-                   seed=0, voxel_size=0.5, timeout=300):
+                   seed=0, voxel_size=0.1, timeout=300):
     repo = Path(repo_path) if repo_path else None
     if not repo or not (repo / "volco.py").is_file():
         return unavailable("volco", "VOLCO source path not configured")
