@@ -1,0 +1,29 @@
+# ruff 설정.
+#
+# 규칙을 명시적으로 고정한다 — ruff 기본값은 버전마다 바뀌어서,
+# 고정하지 않으면 업그레이드할 때마다 경고 목록이 요동친다.
+#
+#   ruff check .          검사
+#   ruff check . --fix    자동 수정 가능한 것만 수정
+#
+# 스타일 취향 규칙(SIM, C4, FURB, PIE 등)은 일부러 뺐다.
+# 여기 있는 것은 전부 "고치면 코드가 나아지는" 것들이다.
+
+target-version = "py311"
+
+[lint]
+select = [
+    "E4",   # import 관련 (E402: 모듈 import 가 파일 맨 위에 없음)
+    "E7",   # 비교문 실수 (== None, == True 등)
+    "E9",   # 파싱 불가 / 들여쓰기 오류
+    "F",    # Pyflakes: 미정의 이름, 안 쓰는 import·변수, f-string 실수
+    "B",    # flake8-bugbear: 조용히 틀리는 패턴 (zip strict, 가변 기본인자 등)
+    "I",    # import 정렬
+]
+
+[lint.per-file-ignores]
+# tests/ 와 tools/ 는 sys.path 를 조작한 뒤에 conical 을 import 한다.
+# 리포지토리 루트를 PYTHONPATH 없이도 찾기 위한 것이라 E402 는 불가피하다.
+# (각 파일에 # noqa: E402 가 이미 달려 있지만, 규칙 자체를 꺼 두는 편이 읽기 쉽다.)
+"tests/*.py" = ["E402"]
+"tools/*.py" = ["E402"]

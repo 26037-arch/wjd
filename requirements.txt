@@ -1,0 +1,11 @@
+trimesh
+numpy
+matplotlib
+# 아래는 실제 STL 견고성 + 레이어별 2D 오버행 판정(overhang_layers.py)에 필요
+shapely
+networkx
+scipy
+# trimesh polygons_full(내장 슬라이서·레이어별 오버행)에 필요
+rtree
+# 그림 라벨 한글화용 (나눔고딕 번들). 시스템에 한글 폰트가 있으면 없어도 된다.
+koreanize-matplotlib

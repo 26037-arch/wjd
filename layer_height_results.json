@@ -1,0 +1,156 @@
+[
+ {
+  "model": "램프 (=허리 r=2)",
+  "layer_height": 0.2,
+  "uniform_opt": 0.0,
+  "band2_opt": 0.019697515888741694,
+  "uniform_pes": 0.0,
+  "band2_pes": 0.7795392213197123,
+  "verdict_opt": "균일",
+  "verdict_pes": "균일",
+  "seconds": 33.7
+ },
+ {
+  "model": "램프 (=허리 r=2)",
+  "layer_height": 0.25,
+  "uniform_opt": 0.043260710224647156,
+  "band2_opt": 0.0,
+  "uniform_pes": 2.684089638640786,
+  "band2_pes": 0.0,
+  "verdict_opt": "밴드2",
+  "verdict_pes": "밴드2",
+  "seconds": 29.8
+ },
+ {
+  "model": "램프 (=허리 r=2)",
+  "layer_height": 0.3,
+  "uniform_opt": 0.2671105010723654,
+  "band2_opt": 0.0,
+  "uniform_pes": 4.113171674875953,
+  "band2_pes": 0.0,
+  "verdict_opt": "밴드2",
+  "verdict_pes": "밴드2",
+  "seconds": 19.0
+ },
+ {
+  "model": "램프 (=허리 r=2)",
+  "layer_height": 0.35,
+  "uniform_opt": 0.6254282451959978,
+  "band2_opt": 0.33735733925595457,
+  "uniform_pes": 6.048439301608631,
+  "band2_pes": 6.087003899158367,
+  "verdict_opt": "밴드2",
+  "verdict_pes": "균일",
+  "seconds": 16.2
+ },
+ {
+  "model": "램프 (=허리 r=2)",
+  "layer_height": 0.4,
+  "uniform_opt": 1.2096906300380244,
+  "band2_opt": 0.7672697700481317,
+  "uniform_pes": 7.644277134814247,
+  "band2_pes": 8.836804697304707,
+  "verdict_opt": "밴드2",
+  "verdict_pes": "균일",
+  "seconds": 10.8
+ },
+ {
+  "model": "램프 (=허리 r=2)",
+  "layer_height": 0.5,
+  "uniform_opt": 2.439118673874411,
+  "band2_opt": 2.3827361177420907,
+  "uniform_pes": 10.304403546156237,
+  "band2_pes": 26.07580181890353,
+  "verdict_opt": "밴드2",
+  "verdict_pes": "균일",
+  "seconds": 8.8
+ },
+ {
+  "model": "허리 r=3",
+  "layer_height": 0.25,
+  "uniform_opt": 0.14072776165585968,
+  "band2_opt": 0.0,
+  "uniform_pes": 2.8869262091808743,
+  "band2_pes": 0.0,
+  "verdict_opt": "밴드2",
+  "verdict_pes": "밴드2",
+  "seconds": 25.0
+ },
+ {
+  "model": "허리 r=3",
+  "layer_height": 0.3,
+  "uniform_opt": 0.5123225303816554,
+  "band2_opt": 0.10381535029054595,
+  "uniform_pes": 4.3385428645791295,
+  "band2_pes": 4.055793479054145,
+  "verdict_opt": "밴드2",
+  "verdict_pes": "밴드2",
+  "seconds": 20.4
+ },
+ {
+  "model": "허리 r=3",
+  "layer_height": 0.4,
+  "uniform_opt": 1.2944236907573812,
+  "band2_opt": 0.7646789191009136,
+  "uniform_pes": 7.032411794246346,
+  "band2_pes": 7.5364090965372155,
+  "verdict_opt": "밴드2",
+  "verdict_pes": "균일",
+  "seconds": 11.8
+ },
+ {
+  "model": "허리 r=3",
+  "layer_height": 0.5,
+  "uniform_opt": 2.5956897502950733,
+  "band2_opt": 2.3904108614080477,
+  "uniform_pes": 9.312526573655692,
+  "band2_pes": 11.209345247779751,
+  "verdict_opt": "밴드2",
+  "verdict_pes": "균일",
+  "seconds": 9.2
+ },
+ {
+  "model": "구",
+  "layer_height": 0.25,
+  "uniform_opt": 0.01774529144886124,
+  "band2_opt": 0.01774529144886124,
+  "uniform_pes": 3.7866659804173164,
+  "band2_pes": 3.7866659804173164,
+  "verdict_opt": "무승부",
+  "verdict_pes": "무승부",
+  "seconds": 18.6
+ },
+ {
+  "model": "구",
+  "layer_height": 0.3,
+  "uniform_opt": 0.12090397709366299,
+  "band2_opt": 0.12090397709366299,
+  "uniform_pes": 6.42257069501706,
+  "band2_pes": 6.42257069501706,
+  "verdict_opt": "무승부",
+  "verdict_pes": "무승부",
+  "seconds": 25.8
+ },
+ {
+  "model": "구",
+  "layer_height": 0.4,
+  "uniform_opt": 0.7477469746897566,
+  "band2_opt": 0.7477469746897566,
+  "uniform_pes": 12.137961763121844,
+  "band2_pes": 12.137961763121844,
+  "verdict_opt": "무승부",
+  "verdict_pes": "무승부",
+  "seconds": 11.3
+ },
+ {
+  "model": "구",
+  "layer_height": 0.5,
+  "uniform_opt": 1.6302413144955543,
+  "band2_opt": 1.6302413144955543,
+  "uniform_pes": 16.28815848026055,
+  "band2_pes": 16.28815848026055,
+  "verdict_opt": "무승부",
+  "verdict_pes": "무승부",
+  "seconds": 9.1
+ }
+]

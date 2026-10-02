@@ -1,0 +1,1399 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>conical slicing 시뮬레이터</title>
+  <!--
+    팀메의 3d_graph.html (Excel 3D 표면 비교)을 확장한 버전.
+    원본 기능(모드 1)은 그대로 두고, G-code 실행 시뮬레이터(모드 2)를 추가:
+      · conical_slice.py 출력(.gcode)을 로드해 툴패스를 3D로 표시
+      · 재생/일시정지/속도/진행 슬라이더로 '실행 과정'을 애니메이션
+      · 색: 높이 / 원뿔 레이어(z+r·tanθ) / 피드 / V회전각
+      · Open5x G-code는 기계좌표 그대로 or 부품좌표 복원(역기구학) 표시
+  -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1020; --panel: #151c2f; --border: #2b3655;
+      --text: #eef2ff; --muted: #aab4d0; --accent: #6ea8fe;
+      --danger: #ff8a8a; --warning: #ffd27a;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg); color: var(--text); }
+    .app { --controls-width: 370px;
+      display: grid;
+      grid-template-columns: var(--controls-width) 7px minmax(0, 1fr);
+      min-height: 100vh; }
+    .controls { padding: 20px; background: var(--panel); overflow-y: auto; min-width: 0; }
+    h1 { margin: 0 0 8px; font-size: 1.2rem; }
+    .field { margin-bottom: 16px; }
+    .field label, .field-title { display: block; margin-bottom: 7px; font-weight: 650; font-size: 0.92rem; }
+    input[type="file"], select, input[type="range"] { width: 100%; }
+    input[type="file"], select, input[type="number"] {
+      padding: 9px; border: 1px solid var(--border); border-radius: 10px;
+      background: var(--bg); color: var(--text); }
+    input[type="number"] { width: 90px; }
+    .check-row { display: flex; align-items: center; gap: 9px; margin: 8px 0; }
+    .check-row input { width: 17px; height: 17px; flex: 0 0 auto; }
+    .range-value { color: var(--accent); font-variant-numeric: tabular-nums; }
+    .mode-tabs { display: flex; gap: 8px; margin-bottom: 18px; }
+    .mode-tabs button {
+      flex: 1; padding: 10px; border: 1px solid var(--border); border-radius: 10px;
+      background: var(--bg); color: var(--muted); cursor: pointer; font-weight: 650; }
+    .mode-tabs button.active { background: var(--accent); color: #0b1020; border-color: var(--accent); }
+    .file-list { display: grid; gap: 8px; }
+    .file-item { display: grid; grid-template-columns: auto 12px minmax(0,1fr);
+      align-items: center; gap: 9px; padding: 9px 10px;
+      border: 1px solid var(--border); border-radius: 9px;
+      background: rgba(255,255,255,0.025); }
+    .file-item input { width: 16px; height: 16px; }
+    .file-color { width: 12px; height: 12px; border-radius: 3px; }
+    .file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis;
+      white-space: nowrap; font-size: 0.88rem; }
+    .data-format, .status, .sim-stats {
+      padding: 12px; border: 1px solid var(--border); border-radius: 10px;
+      background: rgba(255,255,255,0.03); color: var(--muted);
+      font-size: 0.86rem; line-height: 1.55; }
+    .status { min-height: 46px; margin-top: 14px; white-space: pre-wrap; }
+    .status.error { color: var(--danger); border-color: rgba(255,138,138,0.55); }
+    .sim-stats { font-variant-numeric: tabular-nums; white-space: pre-wrap; }
+    .play-row { display: flex; gap: 8px; align-items: center; }
+    .play-row button {
+      padding: 9px 16px; border: 1px solid var(--border); border-radius: 10px;
+      background: var(--bg); color: var(--text); cursor: pointer; font-weight: 700; }
+    .play-row button.playing { background: var(--accent); color: #0b1020; }
+    .play-row select { width: auto; }
+    .chart-wrap { min-width: 0; min-height: 100vh; position: relative; }
+    .sidebar-resizer { position: relative; width: 7px; min-height: 100vh;
+      cursor: col-resize; background: var(--border); touch-action: none; transition: background .15s; }
+    .sidebar-resizer:hover, .sidebar-resizer.dragging { background: var(--accent); }
+    .sidebar-resizer::after { content: ""; position: absolute; inset: 0 -4px; }
+    body.resizing-sidebar { cursor: col-resize; user-select: none; }
+    #chart { width: 100%; height: 100vh; }
+    @media (max-width: 800px) {
+      .app { grid-template-columns: 1fr; }
+      .chart-wrap, #chart { min-height: 72vh; height: 72vh; }
+    }
+  </style>
+</head>
+
+<body>
+  <main class="app">
+    <section class="controls">
+      <h1>conical slicing 시뮬레이터</h1>
+
+      <div class="mode-tabs">
+        <button id="tabExcel" class="active">Excel 표면 비교</button>
+        <button id="tabGcode">G-code 실행</button>
+        <button id="tabVerify">검증</button>
+      </div>
+
+      <!-- ───────── 모드 1: Excel 표면 비교 (원본 그대로) ───────── -->
+      <div id="excelPanel">
+        <div class="field">
+          <label for="excelFiles">Excel 파일 여러 개 선택</label>
+          <input id="excelFiles" type="file" accept=".xlsx,.xls,.xlsm,.xlsb" multiple />
+        </div>
+        <div class="field">
+          <label for="sheetSelect">비교할 시트</label>
+          <select id="sheetSelect" disabled><option>Excel 파일을 먼저 선택하세요</option></select>
+        </div>
+        <div id="fileListField" class="field" hidden>
+          <span class="field-title">표시할 파일</span>
+          <div id="fileList" class="file-list"></div>
+        </div>
+        <div class="field">
+          <span class="field-title">표시 방식</span>
+          <label class="check-row"><input id="showSurface" type="checkbox" checked /><span>표면 표시</span></label>
+          <label class="check-row"><input id="showGrid" type="checkbox" checked /><span>격자선 표시</span></label>
+          <label class="check-row"><input id="showPoints" type="checkbox" /><span>격자점 표시</span></label>
+        </div>
+        <div class="field">
+          <label for="surfaceOpacity">각 표면 투명도: <span id="opacityValue" class="range-value">0.56</span></label>
+          <input id="surfaceOpacity" type="range" min="0" max="1" step="0.02" value="0.56" />
+        </div>
+        <div class="field">
+          <label for="zVisualScale">z축 시각 배율: <span id="zScaleValue" class="range-value">1.00×</span></label>
+          <input id="zVisualScale" type="range" min="0.1" max="10" step="0.1" value="1" />
+        </div>
+        <div class="data-format">
+          <strong>각 시트의 데이터 위치</strong><br />
+          x = κ<sub>max</sub>: B4, C4, D4, ...<br />
+          y = q<sub>0</sub>: A5, A6, A7, ...<br />
+          z: B5부터 시작하는 행렬
+        </div>
+      </div>
+
+      <!-- ───────── 모드 2: G-code 실행 시뮬레이터 (신규) ───────── -->
+      <div id="gcodePanel" hidden>
+        <div class="field">
+          <label for="gcodeFile">G-code 파일 (.gcode)</label>
+          <input id="gcodeFile" type="file" accept=".gcode,.gco,.g,.txt" />
+        </div>
+
+        <div class="field">
+          <label for="stlFile">STL 모델 (선택 — 모델/왜곡/오버행 확인)</label>
+          <input id="stlFile" type="file" accept=".stl" />
+          <label class="check-row"><input id="showModel" type="checkbox" checked /><span>모델 표시</span></label>
+          <label class="check-row"><input id="warpModel" type="checkbox" /><span>변환(왜곡) 상태로 보기</span></label>
+          <label class="check-row"><input id="overhangColor" type="checkbox" checked /><span>서포트 필요 면 빨간 색칠</span></label>
+          <label style="margin-top:8px" for="modelOpacity">모델 투명도:
+            <span id="modelOpacityValue" class="range-value">0.35</span></label>
+          <input id="modelOpacity" type="range" min="0.05" max="1" step="0.05" value="0.35" />
+          <div style="display:flex; gap:8px; align-items:center; margin-top:8px; color:var(--muted); font-size:0.88rem">
+            각도 <input id="angleManual" type="number" value="0" step="1" min="0" max="60" />°
+            <select id="dirManual" style="width:auto">
+              <option value="outward" selected>outward</option>
+              <option value="inward">inward</option>
+            </select>
+            <span style="font-size:0.8rem">(G-code 메타 있으면 자동)</span>
+          </div>
+        </div>
+
+        <div class="field">
+          <span class="field-title">재생</span>
+          <div class="play-row">
+            <button id="playBtn">▶ 재생</button>
+            <select id="playSpeed">
+              <option value="10">느리게</option>
+              <option value="60" selected>보통</option>
+              <option value="300">빠르게</option>
+              <option value="1500">매우 빠르게</option>
+            </select>
+          </div>
+          <label style="margin-top:10px" for="progress">진행:
+            <span id="progressValue" class="range-value">0%</span></label>
+          <input id="progress" type="range" min="0" max="1000" step="1" value="1000" />
+        </div>
+
+        <div class="field">
+          <label for="colorMode">색상 기준</label>
+          <select id="colorMode">
+            <option value="cone" selected>원뿔 레이어 (z + r·tanθ)</option>
+            <option value="z">실제 높이 z</option>
+            <option value="feed">피드레이트 F</option>
+            <option value="v">V 회전각 (Open5x)</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <span class="field-title">표시</span>
+          <label class="check-row"><input id="showTravel" type="checkbox" /><span>이동(비압출) 경로</span></label>
+          <label class="check-row"><input id="showHead" type="checkbox" checked /><span>현재 노즐 위치</span></label>
+          <label class="check-row"><input id="partFrame" type="checkbox" checked /><span>Open5x → 부품좌표 복원(역기구학)</span></label>
+        </div>
+
+        <div class="field">
+          <label>Open5x 파라미터 (부품좌표 복원용)</label>
+          <div style="display:flex; gap:10px; align-items:center; color:var(--muted); font-size:0.88rem">
+            pivot <input id="pivotDepth" type="number" value="50" step="1" /> mm
+          </div>
+        </div>
+
+        <div class="sim-stats" id="simStats">G-code 파일을 선택하세요.
+conical_slice.py 출력(_conical.gcode / _open5x.gcode)을 그대로 읽습니다.</div>
+      </div>
+
+      <!-- ───────── 모드 3: 검증 (독립 재구현 대조) ───────── -->
+      <div id="verifyPanel" hidden>
+        <div class="data-format" style="margin-bottom:14px">
+          이 탭은 <strong>Python 파이프라인과 독립적으로</strong> 문서의 수식을
+          재구현해 대조합니다. CDN 없이(오프라인) 동작.<br />
+          ⚠ 두 구현 모두 같은 AI 도구로 작성 — 완전 독립 아님. 최종 근거는
+          <strong>점 클릭 → 손계산 검산</strong>입니다.
+        </div>
+        <div class="field">
+          <label for="verifyGcode">G-code (;CONICAL_META 포함)</label>
+          <input id="verifyGcode" type="file" accept=".gcode,.gco,.g,.txt" />
+        </div>
+        <div class="field">
+          <label for="verifyTruth">정답지 JSON (선택 — toolpath_check --export-json)</label>
+          <input id="verifyTruth" type="file" accept=".json" />
+        </div>
+        <div class="field">
+          <label for="verifyView3d">3D 색칠</label>
+          <select id="verifyView3d">
+            <option value="heatmap" selected>층간격 히트맵 (아래 지지점까지 거리)</option>
+            <option value="unsupported">미지지 구간 (빨강)</option>
+          </select>
+          <label style="margin-top:8px" for="verifyZmax">단면 탐색 z ≤
+            <span id="verifyZmaxVal" class="range-value">max</span></label>
+          <input id="verifyZmax" type="range" min="0" max="1000" value="1000" />
+          <label style="margin-top:8px" for="verifyRot">회전:
+            <span id="verifyRotVal" class="range-value">30°</span></label>
+          <input id="verifyRot" type="range" min="0" max="360" value="30" />
+        </div>
+        <div class="field">
+          <label for="verifyChartMode">차트</label>
+          <select id="verifyChartMode">
+            <option value="bars" selected>층별 미지지 막대</option>
+            <option value="inspector">프로필 인스펙터 (층간격 배율: 해석식 vs 실측)</option>
+          </select>
+        </div>
+        <div class="field">
+          <button id="selfTestBtn" style="width:100%;padding:10px;border:1px solid var(--border);
+            border-radius:10px;background:var(--bg);color:var(--text);cursor:pointer;font-weight:700">
+            브라우저 자체 테스트 실행 (4종)</button>
+        </div>
+        <div class="sim-stats" id="verifyDiff">G-code 를 로드하면 JS 자체 계산 결과가,
+정답지 JSON 을 추가하면 점 단위 대조가 표시됩니다.</div>
+        <div class="sim-stats" id="verifySelfTest" style="margin-top:10px" hidden></div>
+      </div>
+
+      <div id="status" class="status" aria-live="polite">준비됨.</div>
+    </section>
+
+    <div id="sidebarResizer" class="sidebar-resizer"></div>
+    <section class="chart-wrap">
+      <div id="chart"></div>
+      <div id="verifyView" hidden style="padding:12px">
+        <canvas id="verifyCanvas" width="900" height="520"
+                style="width:100%;background:#0e1428;border:1px solid var(--border);border-radius:10px"></canvas>
+        <canvas id="verifyChart" width="900" height="260"
+                style="width:100%;margin-top:10px;background:#0e1428;border:1px solid var(--border);border-radius:10px"></canvas>
+        <div id="verifyCalc" class="sim-stats" style="margin-top:10px;font-family:ui-monospace,monospace;font-size:0.82rem">
+          점을 클릭하면 손계산 검산(숫자 대입식)이 여기 표시됩니다.</div>
+        <button id="calcCopyBtn" style="margin-top:6px;padding:7px 14px;border:1px solid var(--border);
+          border-radius:8px;background:var(--bg);color:var(--text);cursor:pointer">계산 복사</button>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    "use strict";
+
+    // ═══════════ 공통 (원본 유지) ═══════════
+    const chart = document.getElementById("chart");
+    const statusBox = document.getElementById("status");
+    const app = document.querySelector(".app");
+    const sidebarResizer = document.getElementById("sidebarResizer");
+    const PALETTE = ["#56B4E9","#E69F00","#009E73","#CC79A7","#F0E442",
+                     "#0072B2","#D55E00","#8F8FFF","#7BC96F","#FF8DA1"];
+    function setStatus(msg, kind = "normal") {
+      statusBox.textContent = msg;
+      statusBox.classList.toggle("error", kind === "error");
+    }
+    // 사이드바 리사이저 (원본 그대로)
+    let resizingSidebar = false, resizeFrame = null;
+    function setControlsWidth(clientX) {
+      const rect = app.getBoundingClientRect();
+      const w = Math.max(260, Math.min(clientX - rect.left, Math.min(700, rect.width * 0.7)));
+      app.style.setProperty("--controls-width", `${w}px`);
+      if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
+      resizeFrame = requestAnimationFrame(() => { Plotly.Plots.resize(chart); resizeFrame = null; });
+    }
+    sidebarResizer.addEventListener("pointerdown", e => {
+      resizingSidebar = true; sidebarResizer.classList.add("dragging");
+      document.body.classList.add("resizing-sidebar");
+      sidebarResizer.setPointerCapture(e.pointerId); e.preventDefault(); });
+    sidebarResizer.addEventListener("pointermove", e => { if (resizingSidebar) setControlsWidth(e.clientX); });
+    function finishResize(e) {
+      if (!resizingSidebar) return;
+      resizingSidebar = false; sidebarResizer.classList.remove("dragging");
+      document.body.classList.remove("resizing-sidebar");
+      if (sidebarResizer.hasPointerCapture(e.pointerId)) sidebarResizer.releasePointerCapture(e.pointerId);
+      Plotly.Plots.resize(chart); }
+    sidebarResizer.addEventListener("pointerup", finishResize);
+    sidebarResizer.addEventListener("pointercancel", finishResize);
+
+    // ═══════════ 모드 전환 ═══════════
+    const tabExcel = document.getElementById("tabExcel");
+    const tabGcode = document.getElementById("tabGcode");
+    const tabVerify = document.getElementById("tabVerify");
+    const excelPanel = document.getElementById("excelPanel");
+    const gcodePanel = document.getElementById("gcodePanel");
+    const verifyPanel = document.getElementById("verifyPanel");
+    const verifyView = document.getElementById("verifyView");
+    let mode = "excel";
+    function switchMode(m) {
+      mode = m;
+      tabExcel.classList.toggle("active", m === "excel");
+      tabGcode.classList.toggle("active", m === "gcode");
+      tabVerify.classList.toggle("active", m === "verify");
+      excelPanel.hidden = m !== "excel";
+      gcodePanel.hidden = m !== "gcode";
+      verifyPanel.hidden = m !== "verify";
+      verifyView.hidden = m !== "verify";
+      chart.style.display = m === "verify" ? "none" : "";
+      if (m === "verify") {
+        if (window.renderVerify) window.renderVerify();   // 검증 탭은 Canvas2D (CDN 불필요)
+        return;
+      }
+      Plotly.purge(chart);
+      if (m === "excel") { drawEmptyPlot(); if (datasets.length) renderPlot(); }
+      else { drawEmptyGcodePlot(); if (sim.moves.length) renderSim(); }
+    }
+    tabExcel.addEventListener("click", () => switchMode("excel"));
+    tabGcode.addEventListener("click", () => switchMode("gcode"));
+    tabVerify.addEventListener("click", () => switchMode("verify"));
+
+    // ═══════════ 모드 1: Excel 표면 비교 (팀메 원본 로직 그대로) ═══════════
+    const fileInput = document.getElementById("excelFiles");
+    const sheetSelect = document.getElementById("sheetSelect");
+    const fileListField = document.getElementById("fileListField");
+    const fileList = document.getElementById("fileList");
+    const showSurface = document.getElementById("showSurface");
+    const showGrid = document.getElementById("showGrid");
+    const showPoints = document.getElementById("showPoints");
+    const opacityInput = document.getElementById("surfaceOpacity");
+    const opacityValue = document.getElementById("opacityValue");
+    const zScaleInput = document.getElementById("zVisualScale");
+    const zScaleValue = document.getElementById("zScaleValue");
+    let workbooks = [], datasets = [], sharedSheetNames = [], currentSheetName = "z";
+
+    function isBlank(v) { return v === undefined || v === null || String(v).trim() === ""; }
+    function toFiniteNumber(v, addr, fn) {
+      if (typeof v === "number" && Number.isFinite(v)) return v;
+      const n = Number(String(v).trim().replace(/,/g, ""));
+      if (!Number.isFinite(n)) throw new Error(`${fn}: ${addr} 셀 "${v}" 숫자 해석 불가`);
+      return n; }
+    function normalizedSheetNames(wb) { return [...wb.SheetNames].sort((a,b)=>a.localeCompare(b,"ko")); }
+    function arraysEqual(a,b){ return a.length===b.length && a.every((v,i)=>v===b[i]); }
+    function validateSameSheets(items) {
+      if (!items.length) throw new Error("선택한 파일이 없습니다.");
+      const ref = normalizedSheetNames(items[0].workbook); const bad = [];
+      for (let i=1;i<items.length;i++) {
+        const cand = normalizedSheetNames(items[i].workbook);
+        if (!arraysEqual(ref,cand)) bad.push(items[i].fileName);
+      }
+      if (bad.length) throw new Error(`시트 구성이 다른 파일: ${bad.join(", ")}`);
+      return items[0].workbook.SheetNames; }
+    function readGridFromSheet(sheet, fileName) {
+      const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:A1");
+      const x = [];
+      for (let c=1;c<=range.e.c;c++){ const a=XLSX.utils.encode_cell({r:3,c});
+        const cell=sheet[a]; if(!cell||isBlank(cell.v))break; x.push(toFiniteNumber(cell.v,a,fileName)); }
+      const y = [];
+      for (let r=4;r<=range.e.r;r++){ const a=XLSX.utils.encode_cell({r,c:0});
+        const cell=sheet[a]; if(!cell||isBlank(cell.v))break; y.push(toFiniteNumber(cell.v,a,fileName)); }
+      if (x.length<2) throw new Error(`${fileName}: B4부터 x값 2개 이상 필요`);
+      if (y.length<2) throw new Error(`${fileName}: A5부터 y값 2개 이상 필요`);
+      const z = [];
+      for (let j=0;j<y.length;j++){ const row=[];
+        for (let i=0;i<x.length;i++){ const a=XLSX.utils.encode_cell({r:4+j,c:1+i});
+          const cell=sheet[a]; row.push((!cell||isBlank(cell.v))?null:toFiniteNumber(cell.v,a,fileName)); }
+        z.push(row); }
+      return { x, y, z, validCount: z.flat().filter(Number.isFinite).length }; }
+    function updateFileList() {
+      fileList.innerHTML = "";
+      datasets.forEach(ds => {
+        const row = document.createElement("label"); row.className = "file-item";
+        const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = ds.enabled;
+        cb.addEventListener("change", () => { ds.enabled = cb.checked; renderPlot(); });
+        const col = document.createElement("span"); col.className = "file-color"; col.style.background = ds.color;
+        const nm = document.createElement("span"); nm.className = "file-name"; nm.textContent = ds.fileName;
+        row.append(cb, col, nm); fileList.appendChild(row); });
+      fileListField.hidden = datasets.length === 0; }
+    function makeGridTraces(ds) {
+      const traces = []; const visible = ds.enabled && showGrid.checked;
+      const line = { color: ds.color, width: 4 };
+      const push = (xs,ys,zs)=>traces.push({type:"scatter3d",mode:"lines",x:xs,y:ys,z:zs,
+        line, hoverinfo:"skip", showlegend:false, visible});
+      for (let j=0;j<ds.data.y.length;j++){
+        const xs=[],ys=[],zs=[];
+        for (let i=0;i<ds.data.x.length;i++){ const v=ds.data.z[j][i];
+          xs.push(Number.isFinite(v)?ds.data.x[i]:null); ys.push(Number.isFinite(v)?ds.data.y[j]:null);
+          zs.push(Number.isFinite(v)?v:null); }
+        push(xs,ys,zs); }
+      for (let i=0;i<ds.data.x.length;i++){
+        const xs=[],ys=[],zs=[];
+        for (let j=0;j<ds.data.y.length;j++){ const v=ds.data.z[j][i];
+          xs.push(Number.isFinite(v)?ds.data.x[i]:null); ys.push(Number.isFinite(v)?ds.data.y[j]:null);
+          zs.push(Number.isFinite(v)?v:null); }
+        push(xs,ys,zs); }
+      return traces; }
+    function makePointTrace(ds) {
+      const xs=[],ys=[],zs=[],text=[];
+      for (let j=0;j<ds.data.y.length;j++) for (let i=0;i<ds.data.x.length;i++){
+        const v=ds.data.z[j][i]; if(!Number.isFinite(v))continue;
+        xs.push(ds.data.x[i]); ys.push(ds.data.y[j]); zs.push(v);
+        text.push(`${ds.fileName}<br>κmax=${ds.data.x[i]}<br>q0=${ds.data.y[j]}<br>${currentSheetName}=${v}`); }
+      return { type:"scatter3d", mode:"markers", x:xs,y:ys,z:zs, text,
+        hovertemplate:"%{text}<extra></extra>", marker:{size:3.4,color:ds.color},
+        name:ds.fileName, showlegend:false, visible: ds.enabled && showPoints.checked }; }
+    function makeSurfaceTrace(ds, opacity) {
+      return { type:"surface", x:ds.data.x, y:ds.data.y, z:ds.data.z, name:ds.fileName,
+        opacity, colorscale:[[0,ds.color],[1,ds.color]], showscale:false,
+        hovertemplate:`<b>${ds.fileName}</b><br>κmax=%{x}<br>q0=%{y}<br>${currentSheetName}=%{z}<extra></extra>`,
+        visible: ds.enabled && showSurface.checked, showlegend:false }; }
+    function makeLegendTrace(ds) {
+      return { type:"scatter3d", mode:"markers", x:[null],y:[null],z:[null],
+        marker:{size:8,color:ds.color}, name:ds.fileName, showlegend:true,
+        hoverinfo:"skip", visible: ds.enabled }; }
+    function renderPlot() {
+      if (!datasets.length || mode !== "excel") return;
+      const opacity = Number(opacityInput.value);
+      const zs = Number(zScaleInput.value);
+      opacityValue.textContent = opacity.toFixed(2);
+      zScaleValue.textContent = `${zs.toFixed(2)}×`;
+      const traces = [];
+      datasets.forEach(ds => { traces.push(makeSurfaceTrace(ds, opacity));
+        traces.push(...makeGridTraces(ds)); traces.push(makePointTrace(ds));
+        traces.push(makeLegendTrace(ds)); });
+      Plotly.react(chart, traces, {
+        margin:{l:0,r:0,t:25,b:0}, paper_bgcolor:"#0b1020", plot_bgcolor:"#0b1020",
+        font:{color:"#eef2ff"},
+        legend:{x:0.01,y:0.99,bgcolor:"rgba(11,16,32,0.72)",bordercolor:"#2b3655",borderwidth:1},
+        scene:{ aspectmode:"manual", aspectratio:{x:1,y:1,z:zs},
+          xaxis:{title:{text:"κ<sub>max</sub>"},gridcolor:"#33405f",backgroundcolor:"#0b1020"},
+          yaxis:{title:{text:"q<sub>0</sub>"},gridcolor:"#33405f",backgroundcolor:"#0b1020"},
+          zaxis:{title:{text:currentSheetName},gridcolor:"#33405f",backgroundcolor:"#0b1020"},
+          camera:{eye:{x:1.5,y:1.5,z:1.15}} },
+        uirevision:"keep-camera" },
+        { responsive:true, displaylogo:false, scrollZoom:true }); }
+    function loadSelectedSheet() {
+      if (!workbooks.length) return;
+      try {
+        currentSheetName = sheetSelect.value;
+        datasets = workbooks.map((item,i)=>({ fileName:item.fileName,
+          color:PALETTE[i%PALETTE.length], enabled:true,
+          data:readGridFromSheet(item.workbook.Sheets[currentSheetName], item.fileName) }));
+        updateFileList(); renderPlot();
+        setStatus(`시트: ${currentSheetName} / 파일 ${datasets.length}개`);
+      } catch (err) { datasets=[]; updateFileList(); Plotly.purge(chart); drawEmptyPlot();
+        setStatus(err instanceof Error ? err.message : String(err), "error"); } }
+    async function readWorkbookFile(file) {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type:"array", cellDates:false, cellFormula:true });
+      if (!wb.SheetNames.length) throw new Error(`${file.name}: 시트 없음`);
+      return { fileName:file.name, workbook:wb }; }
+    async function loadFiles() {
+      const files = [...(fileInput.files || [])];
+      if (!files.length) return;
+      try {
+        setStatus(`${files.length}개 Excel 읽는 중...`);
+        const loaded = await Promise.all(files.map(readWorkbookFile));
+        sharedSheetNames = validateSameSheets(loaded); workbooks = loaded;
+        sheetSelect.innerHTML = "";
+        sharedSheetNames.forEach(n => { const o=document.createElement("option");
+          o.value=n; o.textContent=n; sheetSelect.appendChild(o); });
+        sheetSelect.disabled = false; loadSelectedSheet();
+      } catch (err) { setStatus(err instanceof Error ? err.message : String(err), "error"); } }
+    function drawEmptyPlot() {
+      Plotly.newPlot(chart, [], {
+        margin:{l:0,r:0,t:25,b:0}, paper_bgcolor:"#0b1020", plot_bgcolor:"#0b1020",
+        font:{color:"#eef2ff"},
+        annotations:[{text:"왼쪽에서 파일을 선택하세요.",showarrow:false,
+          font:{size:18,color:"#aab4d0"}}] }, { responsive:true, displaylogo:false }); }
+    fileInput.addEventListener("change", loadFiles);
+    sheetSelect.addEventListener("change", loadSelectedSheet);
+    showSurface.addEventListener("change", renderPlot);
+    showGrid.addEventListener("change", renderPlot);
+    showPoints.addEventListener("change", renderPlot);
+    opacityInput.addEventListener("input", renderPlot);
+    zScaleInput.addEventListener("input", renderPlot);
+
+    // ═══════════ 모드 2: G-code 실행 시뮬레이터 (신규) ═══════════
+    const gcodeFile = document.getElementById("gcodeFile");
+    const playBtn = document.getElementById("playBtn");
+    const playSpeed = document.getElementById("playSpeed");
+    const progress = document.getElementById("progress");
+    const progressValue = document.getElementById("progressValue");
+    const colorMode = document.getElementById("colorMode");
+    const showTravel = document.getElementById("showTravel");
+    const showHead = document.getElementById("showHead");
+    const partFrame = document.getElementById("partFrame");
+    const pivotDepth = document.getElementById("pivotDepth");
+    const simStats = document.getElementById("simStats");
+    const stlFile = document.getElementById("stlFile");
+    const showModel = document.getElementById("showModel");
+    const warpModel = document.getElementById("warpModel");
+    const overhangColor = document.getElementById("overhangColor");
+    const modelOpacity = document.getElementById("modelOpacity");
+    const modelOpacityValue = document.getElementById("modelOpacityValue");
+    const angleManual = document.getElementById("angleManual");
+    const dirManual = document.getElementById("dirManual");
+
+    const sim = { moves: [], meta: {}, playing: false, idx: 0, is5x: false,
+                  stl: null };
+
+    // ── STL 파서 (바이너리 + ASCII) ──
+    function parseSTL(buffer) {
+      const view = new DataView(buffer);
+      // ASCII 판별: "solid"로 시작하고 "facet" 포함
+      const head = new TextDecoder().decode(buffer.slice(0, 512));
+      const isAscii = head.trimStart().startsWith("solid") && head.includes("facet");
+      const vx = [], vy = [], vz = [], fi = [], fj = [], fk = [];
+      if (isAscii) {
+        const text = new TextDecoder().decode(buffer);
+        const re = /vertex\s+([-\d.eE+]+)\s+([-\d.eE+]+)\s+([-\d.eE+]+)/g;
+        let m, n = 0;
+        while ((m = re.exec(text)) !== null) {
+          vx.push(Number(m[1])); vy.push(Number(m[2])); vz.push(Number(m[3]));
+          n++;
+          if (n % 3 === 0) { fi.push(n-3); fj.push(n-2); fk.push(n-1); }
+        }
+      } else {
+        const count = view.getUint32(80, true);
+        for (let t = 0; t < count; t++) {
+          const off = 84 + t * 50 + 12;          // 법선 12바이트 건너뜀
+          for (let v = 0; v < 3; v++) {
+            vx.push(view.getFloat32(off + v*12, true));
+            vy.push(view.getFloat32(off + v*12 + 4, true));
+            vz.push(view.getFloat32(off + v*12 + 8, true));
+          }
+          fi.push(t*3); fj.push(t*3+1); fk.push(t*3+2);
+        }
+      }
+      if (!fi.length) throw new Error("STL에서 삼각형을 찾지 못했습니다.");
+      // 파이프라인과 동일한 센터링: XY bbox 중심 → 0, 바닥 → z=0
+      let minx=Infinity,maxx=-Infinity,miny=Infinity,maxy=-Infinity,minz=Infinity;
+      for (let i=0;i<vx.length;i++){
+        if(vx[i]<minx)minx=vx[i]; if(vx[i]>maxx)maxx=vx[i];
+        if(vy[i]<miny)miny=vy[i]; if(vy[i]>maxy)maxy=vy[i];
+        if(vz[i]<minz)minz=vz[i]; }
+      const cx=(minx+maxx)/2, cy=(miny+maxy)/2;
+      for (let i=0;i<vx.length;i++){ vx[i]-=cx; vy[i]-=cy; vz[i]-=minz; }
+      return { vx, vy, vz, fi, fj, fk, nTri: fi.length };
+    }
+
+    // 원뿔 변환 (transform.py 와 동일): x/cosθ, y/cosθ, z + c·r·tanθ
+    function warpVerts(stl, angleDeg, direction) {
+      const th = angleDeg * Math.PI / 180;
+      const c = direction === "inward" ? -1 : 1;
+      const ct = Math.cos(th), tt = Math.tan(th);
+      const wx = new Array(stl.vx.length), wy = new Array(stl.vx.length),
+            wz = new Array(stl.vx.length);
+      for (let i = 0; i < stl.vx.length; i++) {
+        const r = Math.hypot(stl.vx[i], stl.vy[i]);
+        wx[i] = stl.vx[i] / ct; wy[i] = stl.vy[i] / ct;
+        wz[i] = stl.vz[i] + c * r * tt;
+      }
+      return { wx, wy, wz };
+    }
+
+    // 면별 서포트 필요 판정 (analytic.py 와 동일: g = nz·cosα + d·nr·sinα < −sin45)
+    function overhangFaceColors(stl, angleDeg, direction) {
+      const th = angleDeg * Math.PI / 180;
+      const d = direction === "inward" ? -1 : 1;
+      const kappa = -Math.sin(45 * Math.PI / 180);
+      const colors = new Array(stl.nTri);
+      for (let t = 0; t < stl.nTri; t++) {
+        const a = stl.fi[t], b = stl.fj[t], c2 = stl.fk[t];
+        const ux = stl.vx[b]-stl.vx[a], uy = stl.vy[b]-stl.vy[a], uz = stl.vz[b]-stl.vz[a];
+        const wx2 = stl.vx[c2]-stl.vx[a], wy2 = stl.vy[c2]-stl.vy[a], wz2 = stl.vz[c2]-stl.vz[a];
+        let nx = uy*wz2 - uz*wy2, ny = uz*wx2 - ux*wz2, nz = ux*wy2 - uy*wx2;
+        const nl = Math.hypot(nx, ny, nz) || 1;
+        nx/=nl; ny/=nl; nz/=nl;
+        // centroid 반경방향 성분
+        const cxm=(stl.vx[a]+stl.vx[b]+stl.vx[c2])/3, cym=(stl.vy[a]+stl.vy[b]+stl.vy[c2])/3;
+        const rr = Math.hypot(cxm, cym);
+        const nr = rr > 1e-9 ? (cxm*nx + cym*ny)/rr : 0;
+        const g = nz*Math.cos(th) + d*nr*Math.sin(th);
+        colors[t] = g < kappa ? "#d9534f" : "#5f7ea8";   // 빨강=서포트 필요
+      }
+      return colors;
+    }
+
+    // 이 각도에서 남는 서포트 넓이 % (analytic.support_fraction 과 동일 정의)
+    function overhangAreaPct(stl, angleDeg, direction) {
+      const th = angleDeg * Math.PI / 180;
+      const d = direction === "inward" ? -1 : 1;
+      const kappa = -Math.sin(45 * Math.PI / 180);
+      let bad = 0, total = 0;
+      for (let t = 0; t < stl.nTri; t++) {
+        const a = stl.fi[t], b = stl.fj[t], c2 = stl.fk[t];
+        const ux = stl.vx[b]-stl.vx[a], uy = stl.vy[b]-stl.vy[a], uz = stl.vz[b]-stl.vz[a];
+        const wx2 = stl.vx[c2]-stl.vx[a], wy2 = stl.vy[c2]-stl.vy[a], wz2 = stl.vz[c2]-stl.vz[a];
+        let nx = uy*wz2 - uz*wy2, ny = uz*wx2 - ux*wz2, nz = ux*wy2 - uy*wx2;
+        const nl = Math.hypot(nx, ny, nz);
+        if (nl < 1e-12) continue;
+        const area = nl / 2; total += area;
+        nx/=nl; ny/=nl; nz/=nl;
+        const cxm=(stl.vx[a]+stl.vx[b]+stl.vx[c2])/3, cym=(stl.vy[a]+stl.vy[b]+stl.vy[c2])/3;
+        const rr = Math.hypot(cxm, cym);
+        const nr = rr > 1e-9 ? (cxm*nx + cym*ny)/rr : 0;
+        if (nz*Math.cos(th) + d*nr*Math.sin(th) < kappa) bad += area;
+      }
+      return total > 0 ? bad / total * 100 : 0;
+    }
+
+    // conical_slice.py 의 메타/헤더에서 각도·방향·틸트 추출
+    function parseGcodeText(text) {
+      const moves = []; const meta = { angle: null, direction: null, tilt: null };
+      let x=null,y=null,z=null,e=null,f=null,v=null,u=null;
+      let ePrev = 0, len = 0, exLen = 0;
+      const lines = text.split(/\r?\n/);
+      for (let li = 0; li < lines.length; li++) {
+        const raw = lines[li];
+        const cm = raw.match(/;\s*conical:\s*angle=([\d.]+)\s+direction=(\w+)/);
+        if (cm) { meta.angle = Number(cm[1]); meta.direction = cm[2]; }
+        const tm = raw.match(/tilt\s+([A-Z])=(-?[\d.]+)deg/);
+        if (tm) meta.tilt = Number(tm[2]);
+        const code = raw.split(";")[0].trim();
+        if (!code) continue;
+        const words = code.match(/([A-Za-z])([-+]?[0-9]*\.?[0-9]+)/g);
+        if (!words) continue;
+        const g = words[0].toUpperCase();
+        if (g !== "G0" && g !== "G1") continue;
+        let nx=x, ny=y, nz=z, ne=null, nf=f, nv=v, nu=u;
+        for (const w of words.slice(1)) {
+          const k = w[0].toUpperCase(), val = Number(w.slice(1));
+          if (k==="X") nx=val; else if (k==="Y") ny=val; else if (k==="Z") nz=val;
+          else if (k==="E") ne=val; else if (k==="F") nf=val;
+          else if (k==="V"||k==="C") nv=val; else if (k==="U"||k==="B") nu=val;
+        }
+        const extrude = ne !== null && ne > ePrev + 1e-9;
+        if (nx!==null && ny!==null && nz!==null) {
+          if (x!==null && y!==null && z!==null) {
+            const d = Math.hypot(nx-x, ny-y, nz-z);
+            len += d; if (extrude) exLen += d;
+          }
+          moves.push({ x:nx, y:ny, z:nz, f:nf, v:nv, u:nu, extrude, line: li+1 });
+        }
+        x=nx; y=ny; z=nz; if (ne!==null) ePrev=ne; f=nf; v=nv; u=nu;
+      }
+      meta.totalLen = len; meta.exLen = exLen;
+      return { moves, meta };
+    }
+
+    // Open5x 기계좌표 → 부품좌표 복원 (conical/open5x.py 역기구학의 역)
+    function machineToPart(m, tiltDeg, pivot) {
+      // 1) 틸트 해제: p1 = Ry(-t)(m + [0,0,d]) - [0,0,d],  t = -tilt (tilt_sign=-1)
+      const t = -tiltDeg * Math.PI / 180;
+      const ct = Math.cos(-t), st = Math.sin(-t);
+      const zd = m.z + pivot;
+      const x1 = ct*m.x + st*zd, y1 = m.y, z1 = -st*m.x + ct*zd - pivot;
+      // 2) 회전 해제: p = Rz(-v)·p1
+      const a = -(m.v || 0) * Math.PI / 180;
+      const ca = Math.cos(a), sa = Math.sin(a);
+      return { x: ca*x1 - sa*y1, y: sa*x1 + ca*y1, z: z1 };
+    }
+
+    function simColorValue(mv, p, mode_, meta) {
+      if (mode_ === "z") return p.z;
+      if (mode_ === "feed") return mv.f || 0;
+      if (mode_ === "v") return mv.v || 0;
+      // cone: z + r·tanθ (원뿔 레이어 번호에 해당) — 각도는 메타에서
+      const ang = (meta.angle ?? Math.abs(meta.tilt ?? 0)) * Math.PI/180;
+      const sgn = meta.direction === "inward" ? -1 : 1;
+      return p.z + sgn * Math.hypot(p.x, p.y) * Math.tan(ang);
+    }
+
+    function renderSim() {
+      if ((!sim.moves.length && !sim.stl) || mode !== "gcode") return;
+      const upto = Math.max(1, Math.round(sim.idx));
+      const cm = colorMode.value;
+      const restore = sim.is5x && partFrame.checked;
+      const pivot = Number(pivotDepth.value) || 50;
+      const tilt = Math.abs(sim.meta.tilt ?? sim.meta.angle ?? 0);
+      // STL 표시용 각도/방향: 입력칸이 항상 기준 (G-code 로드시 메타값이 미리 채워짐)
+      const mAngle = Number(angleManual.value) || 0;
+      const mDir = dirManual.value;
+
+      const ex = {x:[],y:[],z:[],c:[]}, tr = {x:[],y:[],z:[]};
+      let prev = null; let head = null; let curV = null, curZ = null;
+      for (let i = 0; i < upto && i < sim.moves.length; i++) {
+        const mv = sim.moves[i];
+        const p = restore ? machineToPart(mv, tilt, pivot) : mv;
+        if (prev) {
+          if (mv.extrude) {
+            ex.x.push(prev.x, p.x, null); ex.y.push(prev.y, p.y, null);
+            ex.z.push(prev.z, p.z, null);
+            const cv = simColorValue(mv, p, cm, sim.meta);
+            ex.c.push(cv, cv, cv);
+          } else if (showTravel.checked) {
+            tr.x.push(prev.x, p.x, null); tr.y.push(prev.y, p.y, null);
+            tr.z.push(prev.z, p.z, null);
+          }
+        }
+        prev = p; head = p; curV = mv.v; curZ = p.z;
+      }
+
+      const traces = [];
+
+      // ── STL 모델 (선택) ──
+      // 기계좌표 모드(5축, 복원 꺼짐)에선 좌표계가 달라 모델을 숨긴다.
+      const modelVisible = sim.stl && showModel.checked && !(sim.is5x && !restore);
+      if (modelVisible) {
+        const warped = warpModel.checked;
+        const vv = warped ? warpVerts(sim.stl, mAngle, mDir)
+                          : { wx: sim.stl.vx, wy: sim.stl.vy, wz: sim.stl.vz };
+        const meshTrace = {
+          type:"mesh3d", x:vv.wx, y:vv.wy, z:vv.wz,
+          i:sim.stl.fi, j:sim.stl.fj, k:sim.stl.fk,
+          opacity: Number(modelOpacity.value), flatshading: true,
+          lighting:{ambient:0.55, diffuse:0.7, specular:0.1},
+          name: warped ? "변환 모델" : "원본 모델", hoverinfo:"skip"
+        };
+        if (overhangColor.checked) {
+          // 빨강 = '입력한 각도'에서 남는 서포트 (0이면 평면 슬라이싱 기준).
+          // 각도를 올리면 빨강이 줄어드는 걸 원본/변환 어느 보기에서든 바로 볼 수 있다.
+          //   (변환 후 남은 오버행 = 원본 법선에 g(mAngle) 판정과 동일 — analytic.py)
+          meshTrace.facecolor = overhangFaceColors(sim.stl, mAngle, mDir);
+        } else {
+          meshTrace.color = "#5f7ea8";
+        }
+        traces.push(meshTrace);
+      }
+
+      // 왜곡(변환) 보기는 변환공간이라 실공간 툴패스와 좌표계가 다름 → 툴패스 숨김
+      const showPath = sim.moves.length && !(modelVisible && warpModel.checked);
+      if (showPath) traces.push({
+        type:"scatter3d", mode:"lines", x:ex.x, y:ex.y, z:ex.z,
+        line:{ width:4, color:ex.c, colorscale:"Viridis", showscale:true,
+               colorbar:{ title:{text:colorMode.selectedOptions[0].text}, len:0.6,
+                          tickfont:{color:"#eef2ff"} } },
+        name:"압출", hoverinfo:"skip" });
+      if (showPath && showTravel.checked) traces.push({
+        type:"scatter3d", mode:"lines", x:tr.x, y:tr.y, z:tr.z,
+        line:{width:1.5, color:"#5a6480"}, name:"이동", hoverinfo:"skip", opacity:0.5 });
+      if (showPath && showHead.checked && head) traces.push({
+        type:"scatter3d", mode:"markers", x:[head.x], y:[head.y], z:[head.z],
+        marker:{size:6, color:"#ff8a8a", symbol:"diamond"}, name:"노즐", hoverinfo:"skip" });
+
+      Plotly.react(chart, traces, {
+        margin:{l:0,r:0,t:25,b:0}, paper_bgcolor:"#0b1020", plot_bgcolor:"#0b1020",
+        font:{color:"#eef2ff"}, showlegend:false,
+        scene:{ aspectmode:"data",
+          xaxis:{gridcolor:"#33405f",backgroundcolor:"#0b1020"},
+          yaxis:{gridcolor:"#33405f",backgroundcolor:"#0b1020"},
+          zaxis:{gridcolor:"#33405f",backgroundcolor:"#0b1020"},
+          camera:{eye:{x:1.5,y:1.5,z:0.9}} },
+        uirevision:"keep-camera" },
+        { responsive:true, displaylogo:false, scrollZoom:true });
+
+      if (sim.moves.length) {
+        const pct = (upto / sim.moves.length * 100);
+        progressValue.textContent = `${pct.toFixed(0)}%`;
+        const mv = sim.moves[Math.min(upto, sim.moves.length) - 1];
+        simStats.textContent =
+          `이동 ${upto.toLocaleString()} / ${sim.moves.length.toLocaleString()}  (G-code ${mv.line}행)\n` +
+          `압출 경로 ${ (sim.meta.exLen/1000).toFixed(2) } m  · 전체 ${ (sim.meta.totalLen/1000).toFixed(2) } m\n` +
+          (sim.meta.angle !== null ? `원뿔: ${sim.meta.direction ?? "?"} ${sim.meta.angle}°\n` : "") +
+          (sim.is5x ? `Open5x: 틸트 ${tilt}°  V ${curV === null ? "-" : curV.toFixed(1) + "°"}  ` +
+                      `(${restore ? "부품좌표 복원" : "기계좌표 그대로"})\n` : "") +
+          (curZ !== null ? `현재 z ${curZ.toFixed(2)} mm` : "") +
+          (modelVisible && warpModel.checked ? "\n⚠ 변환 보기: 실공간 툴패스는 숨김(좌표계 다름)" : "") +
+          (cm === "v" && !sim.hasV ?
+            "\n⚠ 이 G-code엔 V축이 없어 단색이 됩니다 (3축 출력)." +
+            "\n   V 색상은 --mode open5x 로 만든 파일에서만 의미 있음." : "");
+      } else if (sim.stl) {
+        const pct = overhangAreaPct(sim.stl, mAngle, mDir);
+        const pct0 = overhangAreaPct(sim.stl, 0, mDir);
+        simStats.textContent =
+          `STL만 표시: 삼각형 ${sim.stl.nTri.toLocaleString()}개\n` +
+          `각도 ${mAngle}° ${mDir} — ${warpModel.checked ? "변환(왜곡) 상태" : "원본"}\n` +
+          `남는 서포트: ${pct.toFixed(1)}%  (평면 0°: ${pct0.toFixed(1)}%)\n` +
+          `빨간 면 = 이 각도에서 서포트 필요한 곳. 각도를 바꿔보세요!`;
+      }
+    }
+
+    function drawEmptyGcodePlot() {
+      Plotly.newPlot(chart, [], {
+        margin:{l:0,r:0,t:25,b:0}, paper_bgcolor:"#0b1020", plot_bgcolor:"#0b1020",
+        font:{color:"#eef2ff"},
+        annotations:[{text:"G-code 파일을 선택하세요 (conical_slice.py 출력).",
+          showarrow:false, font:{size:18,color:"#aab4d0"}}] },
+        { responsive:true, displaylogo:false });
+    }
+
+    gcodeFile.addEventListener("change", async () => {
+      const file = gcodeFile.files && gcodeFile.files[0];
+      if (!file) return;
+      try {
+        setStatus(`${file.name} 읽는 중...`);
+        const text = await file.text();
+        const parsed = parseGcodeText(text);
+        if (!parsed.moves.length) throw new Error("G0/G1 이동을 찾지 못했습니다.");
+        sim.moves = parsed.moves; sim.meta = parsed.meta;
+        sim.hasV = parsed.moves.some(m => m.v !== null && m.v !== undefined);
+        sim.is5x = sim.hasV && parsed.meta.tilt !== null;
+        // G-code 메타의 각도/방향을 입력칸에 미리 채움 (이후엔 입력칸이 기준)
+        if (parsed.meta.angle !== null) angleManual.value = parsed.meta.angle;
+        if (parsed.meta.direction) dirManual.value = parsed.meta.direction;
+        sim.idx = parsed.moves.length;
+        progress.value = 1000;
+        setStatus(`${file.name}: 이동 ${parsed.moves.length.toLocaleString()}개` +
+                  (sim.is5x ? " (Open5x 5축)" : " (3축)"));
+        renderSim();
+      } catch (err) { setStatus(err instanceof Error ? err.message : String(err), "error"); }
+    });
+
+    // 재생 루프
+    let rafId = null;
+    function tick() {
+      if (!sim.playing) return;
+      sim.idx += Number(playSpeed.value) / 10;
+      if (sim.idx >= sim.moves.length) { sim.idx = sim.moves.length; stopPlay(); }
+      progress.value = String(Math.round(sim.idx / sim.moves.length * 1000));
+      renderSim();
+      rafId = requestAnimationFrame(tick);
+    }
+    function startPlay() {
+      if (!sim.moves.length) return;
+      if (sim.idx >= sim.moves.length) sim.idx = 1;   // 끝이면 처음부터
+      sim.playing = true; playBtn.textContent = "⏸ 정지"; playBtn.classList.add("playing");
+      rafId = requestAnimationFrame(tick);
+    }
+    function stopPlay() {
+      sim.playing = false; playBtn.textContent = "▶ 재생"; playBtn.classList.remove("playing");
+      if (rafId) cancelAnimationFrame(rafId);
+    }
+    playBtn.addEventListener("click", () => sim.playing ? stopPlay() : startPlay());
+    progress.addEventListener("input", () => {
+      stopPlay();
+      sim.idx = Math.max(1, Number(progress.value) / 1000 * sim.moves.length);
+      renderSim();
+    });
+    colorMode.addEventListener("change", renderSim);
+    showTravel.addEventListener("change", renderSim);
+    showHead.addEventListener("change", renderSim);
+    partFrame.addEventListener("change", renderSim);
+    pivotDepth.addEventListener("change", renderSim);
+
+    stlFile.addEventListener("change", async () => {
+      const file = stlFile.files && stlFile.files[0];
+      if (!file) return;
+      try {
+        setStatus(`${file.name} (STL) 읽는 중...`);
+        sim.stl = parseSTL(await file.arrayBuffer());
+        setStatus(`${file.name}: 삼각형 ${sim.stl.nTri.toLocaleString()}개` +
+                  (sim.moves.length ? "" : " (G-code 없이 모델만 표시)"));
+        if (!sim.moves.length) sim.idx = 1;
+        renderSim();
+      } catch (err) { setStatus(err instanceof Error ? err.message : String(err), "error"); }
+    });
+    showModel.addEventListener("change", renderSim);
+    warpModel.addEventListener("change", renderSim);
+    overhangColor.addEventListener("change", renderSim);
+    modelOpacity.addEventListener("input", () => {
+      modelOpacityValue.textContent = Number(modelOpacity.value).toFixed(2);
+      renderSim(); });
+    angleManual.addEventListener("input", renderSim);   // 화살표/타이핑 즉시 반영
+    angleManual.addEventListener("change", renderSim);
+    dirManual.addEventListener("change", renderSim);
+
+    drawEmptyPlot();
+  </script>
+
+  <script>
+    "use strict";
+    // ═══════════════════════════════════════════════════════════
+    // 검증 탭 — Python 과 '독립'으로, 문서의 수식에서 직접 구현.
+    // 참조: conical/profile.py·toolpath.py 의 docstring 수식만.
+    //   함수 본문 번역 금지(같은 버그 복제 방지). Canvas2D 전용(CDN 불필요).
+    // ═══════════════════════════════════════════════════════════
+
+    // ── 수식 1: 프로필 T(Z′)=tanθ 브레이크포인트 선형보간, 끝 상수 외삽 ──
+    function vProfile(bps) {                 // bps: [[Zw, thetaDeg], ...]
+      const zs = bps.map(b => b[0]);
+      const th = bps.map(b => b[1]);
+      const tans = th.map(d => Math.tan(d * Math.PI / 180));
+      function tanAt(zw) {
+        if (zw <= zs[0]) return tans[0];
+        if (zw >= zs[zs.length - 1]) return tans[tans.length - 1];
+        for (let i = 0; i < zs.length - 1; i++) {
+          if (zw <= zs[i + 1]) {
+            const s = (tans[i + 1] - tans[i]) / (zs[i + 1] - zs[i]);
+            return tans[i] + s * (zw - zs[i]);
+          }
+        }
+        return tans[tans.length - 1];
+      }
+      function segAt(zw) {                   // 손계산·배율용: 구간 정보
+        if (zw <= zs[0]) return { a: -Infinity, b: zs[0], ta: tans[0], s: 0, i: -1 };
+        for (let i = 0; i < zs.length - 1; i++) {
+          if (zw <= zs[i + 1]) {
+            return { a: zs[i], b: zs[i + 1], ta: tans[i],
+                     s: (tans[i + 1] - tans[i]) / (zs[i + 1] - zs[i]), i };
+          }
+        }
+        return { a: zs[zs.length - 1], b: Infinity, ta: tans[tans.length - 1], s: 0, i: -2 };
+      }
+      return { zs, th, tans, tanAt, segAt,
+               thetaAt: zw => Math.atan(tanAt(zw)) * 180 / Math.PI };
+    }
+
+    // ── 수식 2: 역변환  x=X·cosθ, y=Y·cosθ, z=Zw − c·√(X²+Y²)·sinθ ──
+    function vInverse(X, Y, Zw, prof, c) {
+      const t = prof.thetaAt(Zw) * Math.PI / 180;
+      return { x: X * Math.cos(t), y: Y * Math.cos(t),
+               z: Zw - c * Math.hypot(X, Y) * Math.sin(t) };
+    }
+
+    // ── 수식 3: 정변환  구간 [a,b]에서 Z′=(z+c·r·(t_a−s·a))/(1−c·r·s) ──
+    function vForward(z, r, prof, c) {
+      const zs = prof.zs, tans = prof.tans;
+      // 왼쪽 바깥 (상수)
+      let cand = z + c * r * tans[0];
+      if (cand <= zs[0] + 1e-9) return cand;
+      for (let i = 0; i < zs.length - 1; i++) {
+        const a = zs[i], b = zs[i + 1];
+        const s = (tans[i + 1] - tans[i]) / (b - a);
+        const denom = 1 - c * r * s;
+        if (denom <= 1e-12) continue;
+        cand = (z + c * r * (tans[i] - s * a)) / denom;
+        if (cand >= a - 1e-9 && cand <= b + 1e-9) return cand;
+      }
+      cand = z + c * r * tans[tans.length - 1];
+      if (cand >= zs[zs.length - 1] - 1e-9) return cand;
+      return NaN;                            // 가역성 위반이면 해 없음
+    }
+
+    // ── 수식 4: 층간격 배율 = 1 − c·r·s ──
+    function vSpacingFactor(zw, r, prof, c) {
+      return 1 - c * r * prof.segAt(zw).s;
+    }
+
+    // ── G-code 파서 (검증 탭 자체) + CONICAL_META ──
+    function vParse(text) {
+      const moves = []; let meta = null;
+      let x = null, y = null, z = null, e = 0;
+      const lines = text.split(/\r?\n/);
+      for (let li = 0; li < lines.length; li++) {
+        const raw = lines[li];
+        if (raw.startsWith(";CONICAL_META")) {
+          try { meta = JSON.parse(raw.slice(13)); } catch (_) {}
+          continue;
+        }
+        const code = raw.split(";")[0].trim();
+        if (!code) continue;
+        const ws = code.match(/([A-Za-z])([-+]?[0-9]*\.?[0-9]+)/g);
+        if (!ws || (ws[0].toUpperCase() !== "G0" && ws[0].toUpperCase() !== "G1")) continue;
+        let nx = x, ny = y, nz = z, ne = null;
+        for (const w of ws.slice(1)) {
+          const k = w[0].toUpperCase(), v = Number(w.slice(1));
+          if (k === "X") nx = v; else if (k === "Y") ny = v;
+          else if (k === "Z") nz = v; else if (k === "E") ne = v;
+        }
+        const extrude = ne !== null && ne > e + 1e-9;
+        moves.push({ x0: x, y0: y, z0: z, x: nx, y: ny, z: nz,
+                     extrude, line: li + 1, raw });
+        x = nx; y = ny; z = nz; if (ne !== null) e = ne;
+      }
+      return { moves, meta };
+    }
+
+    // ── 수식 5a: 압출 세그먼트 샘플링 (간격 = width/2) ──
+    function vSample(moves, width) {
+      const sp = width / 2, pts = [];
+      for (const m of moves) {
+        if (!m.extrude || m.x0 === null || m.y0 === null || m.z0 === null ||
+            m.x === null || m.y === null || m.z === null) continue;
+        const L = Math.hypot(m.x - m.x0, m.y - m.y0, m.z - m.z0);
+        if (L < 1e-9) continue;
+        const n = Math.max(1, Math.ceil(L / sp));
+        for (let i = 1; i <= n; i++) {
+          const t = i / n;
+          pts.push({ x: m.x0 + (m.x - m.x0) * t, y: m.y0 + (m.y - m.y0) * t,
+                     z: m.z0 + (m.z - m.z0) * t, w: L / n, line: m.line, raw: m.raw });
+        }
+      }
+      return pts;
+    }
+
+    // ── 수식 5b: 지지 판정 — z-버킷 해시 그리드 (규칙은 문서와 동일) ──
+    //   (i) z ≤ 1.5×층고 → 베드  (ii) 앞선 점 중 수평 ≤ 폭, 수직 아래 (0, 1.5×층고]
+    //   부수 출력: nearestDz = 아래 지지 후보까지 최소 수직거리 (히트맵용, 6×층고까지 탐색)
+    function vSupport(pts, lh, width) {
+      const vwin = 1.5 * lh, deep = 20 * lh;   // 깊은 탐색: 층간격 팽창(~15배) 실측용
+      const cx = width, cz = vwin;
+      const grid = new Map();
+      const key = (ix, iy, iz) => ix + "," + iy + "," + iz;
+      const sup = new Array(pts.length).fill(false);
+      const nearestDz = new Array(pts.length).fill(Infinity);
+      const supBy = new Array(pts.length).fill(-1);      // 손계산용 지지점 인덱스
+      for (let k = 0; k < pts.length; k++) {
+        const p = pts[k];
+        if (p.z <= vwin + 1e-9) { sup[k] = true; nearestDz[k] = p.z; }
+        const ix = Math.floor(p.x / cx), iy = Math.floor(p.y / cx);
+        const izTop = Math.floor(p.z / cz), izBot = Math.floor((p.z - deep) / cz);
+        for (let gx = ix - 1; gx <= ix + 1; gx++)
+          for (let gy = iy - 1; gy <= iy + 1; gy++)
+            for (let gz = izBot; gz <= izTop; gz++) {
+              const cell = grid.get(key(gx, gy, gz));
+              if (!cell) continue;
+              for (const j of cell) {
+                const q = pts[j];
+                const dz = p.z - q.z;
+                if (dz <= 1e-9 || dz > deep) continue;
+                if (Math.hypot(p.x - q.x, p.y - q.y) > width + 1e-9) continue;
+                if (dz < nearestDz[k]) nearestDz[k] = dz;
+                if (dz <= vwin + 1e-9 && !sup[k]) { sup[k] = true; supBy[k] = j; }
+              }
+            }
+        const kk = key(ix, iy, Math.floor(p.z / cz));
+        if (!grid.has(kk)) grid.set(kk, []);
+        grid.get(kk).push(k);
+      }
+      let bad = 0, tot = 0;
+      const layers = new Map();
+      for (let k = 0; k < pts.length; k++) {
+        tot += pts[k].w;
+        const zb = Math.floor(pts[k].z / lh);
+        if (!layers.has(zb)) layers.set(zb, [0, 0]);
+        const L = layers.get(zb); L[1] += pts[k].w;
+        if (!sup[k]) { bad += pts[k].w; L[0] += pts[k].w; }
+      }
+      return { sup, nearestDz, supBy,
+               unsupportedPct: tot > 0 ? bad / tot * 100 : 0,
+               layers };
+    }
+
+    // ═══════════ 상태·계산 실행 ═══════════
+    const V = { pts: [], res: null, prof: null, meta: null, truth: null,
+                proj: [], zmax: Infinity };
+    const vGcodeIn = document.getElementById("verifyGcode");
+    const vTruthIn = document.getElementById("verifyTruth");
+    const vCanvas = document.getElementById("verifyCanvas");
+    const vChart = document.getElementById("verifyChart");
+    const vDiff = document.getElementById("verifyDiff");
+    const vSelfTest = document.getElementById("verifySelfTest");
+    const vCalc = document.getElementById("verifyCalc");
+
+    function vCompute() {
+      if (!V.meta || !V.pts.length) return;
+      const t0 = performance.now();
+      V.prof = vProfile(V.meta.profile);
+      V.res = vSupport(V.pts, V.meta.layer_height, V.meta.extrusion_width);
+      const ms = performance.now() - t0;
+      let txt = `JS 자체 계산 (${V.pts.length.toLocaleString()}점, ${ms.toFixed(0)}ms)\n` +
+                `미지지 압출: ${V.res.unsupportedPct.toFixed(2)} %  (길이 가중)\n`;
+      if (V.truth) {
+        const T = V.truth;
+        txt += `\n─ 대조 (Python 정답지) ─\n` +
+               `미지지%: Python ${T.unsupported_pct.toFixed(2)} vs JS ` +
+               `${V.res.unsupportedPct.toFixed(2)}  (차 ${(V.res.unsupportedPct - T.unsupported_pct).toFixed(3)}%p)\n`;
+        if (T.points.length === V.pts.length) {
+          let mis = 0; const misList = [];
+          for (let k = 0; k < V.pts.length; k++) {
+            const pv = T.points[k][3] === 1;
+            if (pv !== V.res.sup[k]) {
+              mis++;
+              if (misList.length < 20) misList.push(k);
+            }
+          }
+          V.mismatch = new Set(misList.length < mis ? misList : misList);
+          const rate = (1 - mis / V.pts.length) * 100;
+          txt += `점 단위 판정 일치율: ${rate.toFixed(3)} %  (불일치 ${mis.toLocaleString()}점)`;
+          if (mis === 0) txt += `  일치 ✔`;
+          else {
+            txt += `\n불일치 상위 ${misList.length}점 (자홍색 표시):\n`;
+            for (const k of misList) {
+              const p = V.pts[k];
+              const nd = V.res.nearestDz[k];
+              const near = Math.abs(nd - 1.5 * V.meta.layer_height) < 1e-3;
+              txt += `  (${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)}) ` +
+                     `Py=${T.points[k][3] ? "지지" : "미지지"} JS=${V.res.sup[k] ? "지지" : "미지지"}` +
+                     `${near ? " [임계 ±근방 — 부동소수 경계, 정상]" : ""}\n`;
+            }
+          }
+        } else {
+          txt += `점 개수 불일치: Python ${T.points.length.toLocaleString()} vs ` +
+                 `JS ${V.pts.length.toLocaleString()} → 집계만 비교`;
+        }
+      } else {
+        txt += `(정답지 JSON 없음 — JS 자체 계산만. toolpath_check.py --export-json 으로 생성 가능)`;
+      }
+      txt += `\n⚠ 임계값 ±1e-6 근방의 소수 불일치는 부동소수 경계로 정상.`;
+      vDiff.textContent = txt;
+      renderVerify();
+    }
+
+    vGcodeIn.addEventListener("change", async () => {
+      const f = vGcodeIn.files && vGcodeIn.files[0];
+      if (!f) return;
+      const parsed = vParse(await f.text());
+      if (!parsed.meta) {
+        vDiff.textContent = ";CONICAL_META 없음 — 최신 conical_slice.py 출력을 사용하세요.";
+        return;
+      }
+      V.meta = parsed.meta;
+      V.pts = vSample(parsed.moves, parsed.meta.extrusion_width);
+      V.mismatch = null;
+      vCompute();
+    });
+    vTruthIn.addEventListener("change", async () => {
+      const f = vTruthIn.files && vTruthIn.files[0];
+      if (!f) return;
+      V.truth = JSON.parse(await f.text());
+      vCompute();
+    });
+
+    // ═══════════ Canvas2D 렌더 (3D 투영 + 차트) ═══════════
+    function project(p, rot, box) {
+      const a = rot * Math.PI / 180;
+      const cx = (box.minx + box.maxx) / 2, cy = (box.miny + box.maxy) / 2;
+      const rx = (p.x - cx) * Math.cos(a) - (p.y - cy) * Math.sin(a);
+      const ry = (p.x - cx) * Math.sin(a) + (p.y - cy) * Math.cos(a);
+      return { sx: rx, sy: -p.z + ry * 0.35 };
+    }
+    function heatColor(nd, lh) {
+      if (!isFinite(nd)) return "#7a1010";           // 지지 후보 없음 = 진빨강
+      const r = nd / lh;
+      if (r <= 1) return "#3b6fd4";                  // 층고 이하 = 파랑
+      if (r <= 1.5) { const t = (r - 1) / 0.5;       // 파랑→노랑
+        return `rgb(${59 + t * 196},${111 + t * 100},${212 - t * 140})`; }
+      if (r <= 3) { const t = (r - 1.5) / 1.5;       // 노랑→빨강
+        return `rgb(${255},${211 - t * 150},${72 - t * 60})`; }
+      return "#d22";                                  // ≥3×층고
+    }
+    window.renderVerify = function () {
+      const ctx = vCanvas.getContext("2d");
+      ctx.fillStyle = "#0e1428"; ctx.fillRect(0, 0, vCanvas.width, vCanvas.height);
+      if (!V.pts.length) {
+        ctx.fillStyle = "#aab4d0"; ctx.font = "16px sans-serif";
+        ctx.fillText("G-code 를 로드하세요 (;CONICAL_META 포함 — conical_slice.py 출력)", 40, 60);
+        drawChart();
+        return;
+      }
+      const rot = Number(document.getElementById("verifyRot").value);
+      const mode3d = document.getElementById("verifyView3d").value;
+      const lh = V.meta.layer_height;
+      const box = { minx: Infinity, maxx: -Infinity, miny: Infinity, maxy: -Infinity };
+      for (const p of V.pts) { box.minx = Math.min(box.minx, p.x); box.maxx = Math.max(box.maxx, p.x);
+        box.miny = Math.min(box.miny, p.y); box.maxy = Math.max(box.maxy, p.y); }
+      // 투영 범위
+      let sminx = Infinity, smaxx = -Infinity, sminy = Infinity, smaxy = -Infinity;
+      const prj = V.pts.map(p => project(p, rot, box));
+      for (const s of prj) { sminx = Math.min(sminx, s.sx); smaxx = Math.max(smaxx, s.sx);
+        sminy = Math.min(sminy, s.sy); smaxy = Math.max(smaxy, s.sy); }
+      const pad = 30;
+      const sc = Math.min((vCanvas.width - 2 * pad) / (smaxx - sminx + 1e-9),
+                          (vCanvas.height - 2 * pad) / (smaxy - sminy + 1e-9));
+      V.proj = prj.map(s => ({ px: pad + (s.sx - sminx) * sc,
+                               py: pad + (s.sy - sminy) * sc }));
+      for (let k = 0; k < V.pts.length; k++) {
+        const p = V.pts[k];
+        if (p.z > V.zmax) continue;
+        let col;
+        if (V.mismatch && V.mismatch.has(k)) col = "#ff00ff";
+        else if (mode3d === "heatmap") col = heatColor(V.res.nearestDz[k], lh);
+        else col = V.res.sup[k] ? "rgba(154,167,196,0.25)" : "#d9534f";
+        ctx.fillStyle = col;
+        ctx.fillRect(V.proj[k].px, V.proj[k].py, 2, 2);
+      }
+      ctx.fillStyle = "#aab4d0"; ctx.font = "12px sans-serif";
+      ctx.fillText(mode3d === "heatmap" ?
+        "층간격 히트맵: 파랑=층고 이하 · 노랑=1.5× · 빨강=3×+ · 진빨강=지지 없음 (클릭=손계산)" :
+        "빨강=미지지 · 회색=지지 (클릭=손계산)", 12, vCanvas.height - 10);
+      drawChart();
+    };
+
+    function drawChart() {
+      const ctx = vChart.getContext("2d");
+      ctx.fillStyle = "#0e1428"; ctx.fillRect(0, 0, vChart.width, vChart.height);
+      if (!V.res) return;
+      const mode = document.getElementById("verifyChartMode").value;
+      const lh = V.meta.layer_height;
+      ctx.font = "11px sans-serif";
+      if (mode === "bars") {
+        // 층별 미지지% 막대 + 최악 5 강조
+        const entries = [...V.res.layers.entries()].sort((a, b) => a[0] - b[0]);
+        const worst = new Set([...entries].sort((a, b) => (b[1][0] / b[1][1]) - (a[1][0] / a[1][1]))
+                              .slice(0, 5).map(e => e[0]));
+        const bw = (vChart.width - 60) / Math.max(entries.length, 1);
+        entries.forEach(([zb, [bad, tot]], i) => {
+          const pct = tot > 0 ? bad / tot * 100 : 0;
+          const h = pct / 100 * (vChart.height - 50);
+          ctx.fillStyle = worst.has(zb) && pct > 0 ? "#d9534f" : "#4c72b0";
+          ctx.fillRect(40 + i * bw, vChart.height - 30 - h, Math.max(bw - 1, 1), h);
+        });
+        ctx.fillStyle = "#aab4d0";
+        ctx.fillText("층별 미지지% (z 오름차순, 빨강=최악 5개층)", 12, 16);
+        ctx.fillText("0%", 12, vChart.height - 30); ctx.fillText("100%", 8, 24);
+      } else {
+        // 프로필 인스펙터: 좌 θ(Z′)·tanθ, 우 층간격 배율(해석식) vs 실측 산점
+        const W2 = vChart.width / 2 - 30, H = vChart.height - 50;
+        const prof = V.prof, c = V.meta.direction === "inward" ? -1 : 1;
+        const zlo = prof.zs[0] - 1, zhi = prof.zs[prof.zs.length - 1] + 1;
+        // 좌: θ(Z′)
+        ctx.strokeStyle = "#56B4E9"; ctx.beginPath();
+        for (let i = 0; i <= 100; i++) {
+          const zw = zlo + (zhi - zlo) * i / 100;
+          const t = prof.thetaAt(zw);
+          const px = 40 + (zw - zlo) / (zhi - zlo) * W2;
+          const py = vChart.height - 30 - (t + 50) / 100 * H;
+          i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+        } ctx.stroke();
+        ctx.fillStyle = "#aab4d0";
+        ctx.fillText("θ(Z′) [−50..50°]", 40, 16);
+        // 우: 배율 곡선 (가장 가파른 블렌드 구간) + 실측 산점 (r, dz/층고)
+        let blend = null;
+        for (let i = 0; i < prof.zs.length - 1; i++) {
+          const s = (prof.tans[i + 1] - prof.tans[i]) / (prof.zs[i + 1] - prof.zs[i]);
+          if (Math.abs(s) > 1e-12 && (!blend || Math.abs(s) > Math.abs(blend.s)))
+            blend = { a: prof.zs[i], b: prof.zs[i + 1], s };
+        }
+        const x0 = vChart.width / 2 + 20;
+        let rmaxSeen = 1;
+        for (const p of V.pts) rmaxSeen = Math.max(rmaxSeen, Math.hypot(p.x, p.y));
+        const fmax = blend ? Math.max(2, 1 + rmaxSeen * Math.abs(blend.s)) : 2;
+        if (blend) {
+          ctx.strokeStyle = "#E69F00"; ctx.beginPath();
+          for (let i = 0; i <= 100; i++) {
+            const r = rmaxSeen * i / 100;
+            const f = Math.abs(1 - c * r * blend.s);
+            const px = x0 + r / rmaxSeen * W2;
+            const py = vChart.height - 30 - Math.min(f / fmax, 1) * H;
+            i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+          } ctx.stroke();
+          // 실측: 블렌드 Zw 구간 안의 샘플 → (r, nearestDz/층고)
+          ctx.fillStyle = "#7BC96F";
+          let plotted = 0;
+          for (let k = 0; k < V.pts.length && plotted < 4000; k++) {
+            const p = V.pts[k];
+            const r = Math.hypot(p.x, p.y);
+            const zw = vForward(p.z, r, prof, c);
+            if (!(zw >= blend.a && zw <= blend.b)) continue;
+            const nd = V.res.nearestDz[k];
+            if (!isFinite(nd)) continue;
+            const f = nd / lh;
+            ctx.fillRect(x0 + r / rmaxSeen * W2,
+                         vChart.height - 30 - Math.min(f / fmax, 1) * H, 2.5, 2.5);
+            plotted++;
+          }
+          ctx.fillStyle = "#aab4d0";
+          ctx.fillText(`층간격 배율 |1−c·r·s| (주황=해석식, 초록=실측 dz/층고, 블렌드 [${blend.a.toFixed(1)},${blend.b.toFixed(1)}], s=${blend.s.toFixed(3)}) 세로 0..${fmax.toFixed(1)}×`, x0, 16);
+        } else {
+          ctx.fillStyle = "#aab4d0";
+          ctx.fillText("블렌드 없음 (상수 프로필) — 배율 항상 1", x0, 16);
+        }
+      }
+    }
+
+    // ═══════════ 손계산 검산 (점 클릭) ═══════════
+    vCanvas.addEventListener("click", ev => {
+      if (!V.pts.length || !V.proj.length) return;
+      const rect = vCanvas.getBoundingClientRect();
+      const mx = (ev.clientX - rect.left) * vCanvas.width / rect.width;
+      const my = (ev.clientY - rect.top) * vCanvas.height / rect.height;
+      let best = -1, bd = 100;
+      for (let k = 0; k < V.proj.length; k++) {
+        if (V.pts[k].z > V.zmax) continue;
+        const d = Math.hypot(V.proj[k].px - mx, V.proj[k].py - my);
+        if (d < bd) { bd = d; best = k; }
+      }
+      if (best < 0 || bd > 10) return;
+      const p = V.pts[best];
+      const prof = V.prof, meta = V.meta;
+      const c = meta.direction === "inward" ? -1 : 1;
+      const r = Math.hypot(p.x, p.y);
+      const zw = vForward(p.z, r, prof, c);
+      const seg = prof.segAt(zw);
+      const T = prof.tanAt(zw);
+      const th = Math.atan(T) * 180 / Math.PI;
+      const f = 1 - c * r * seg.s;
+      const nd = V.res.nearestDz[best];
+      const vwin = 1.5 * meta.layer_height;
+      const supTxt = V.res.sup[best]
+        ? (p.z <= vwin + 1e-9
+           ? `z=${p.z.toFixed(3)} ≤ 1.5×층고=${vwin.toFixed(2)} → 베드 지지`
+           : `아래 ${nd.toFixed(3)}mm (≤ ${vwin.toFixed(2)})·수평 ≤ ${meta.extrusion_width} 이내 앞선 점 존재 → 지지`)
+        : `아래 (0, ${vwin.toFixed(2)}] 범위·수평 ${meta.extrusion_width}mm 이내에 앞선 점 없음` +
+          (isFinite(nd) ? ` (가장 가까운 아래 지지 후보 ${nd.toFixed(3)}mm)` : " (후보 자체가 없음)") +
+          ` → 미지지`;
+      vCalc.textContent =
+`선택 점: 실공간 x=${p.x.toFixed(3)}  y=${p.y.toFixed(3)}  z=${p.z.toFixed(3)}
+  (G-code ${p.line}행: ${p.raw.trim()})
+  r = √(x²+y²) = √(${p.x.toFixed(3)}² + ${p.y.toFixed(3)}²) = ${r.toFixed(4)}
+  Z′ (정변환): z = Z′ − c·r·T(Z′) 의 해 → Z′ = ${zw.toFixed(4)}   (c=${c})
+  θ(Z′): ${seg.i >= 0 ? `구간 [${seg.a.toFixed(2)}, ${seg.b.toFixed(2)}], t_a=${seg.ta.toFixed(4)}, s=${seg.s.toFixed(4)}
+          T = ${seg.ta.toFixed(4)} + (${seg.s.toFixed(4)})×(${zw.toFixed(4)}−${seg.a.toFixed(2)}) = ${T.toFixed(4)}` :
+          `상수 구간, T = ${T.toFixed(4)}`}  →  θ = atan(${T.toFixed(4)}) = ${th.toFixed(2)}°
+  검산(역변환): z = Z′ − c·r·sinθ/cosθ·cosθ… = ${zw.toFixed(4)} − ${c}×${r.toFixed(4)}×${Math.tan(th * Math.PI / 180).toFixed(4)} = ${(zw - c * r * Math.tan(th * Math.PI / 180)).toFixed(4)}  (원래 z=${p.z.toFixed(4)})
+  층간격 배율 = 1 − c·r·s = 1 − ${c}×${r.toFixed(4)}×(${seg.s.toFixed(4)}) = ${f.toFixed(2)}배
+  지지 판정: ${supTxt}`;
+    });
+    document.getElementById("calcCopyBtn").addEventListener("click", () => {
+      navigator.clipboard && navigator.clipboard.writeText(vCalc.textContent);
+    });
+
+    // ═══════════ 슬라이더·셀렉트 ═══════════
+    document.getElementById("verifyRot").addEventListener("input", () => {
+      document.getElementById("verifyRotVal").textContent =
+        document.getElementById("verifyRot").value + "°";
+      renderVerify();
+    });
+    document.getElementById("verifyZmax").addEventListener("input", () => {
+      if (!V.pts.length) return;
+      const zs = V.pts.map(p => p.z);
+      const zmin = Math.min(...zs.slice(0, 5000)), zmaxAll = Math.max(...zs.slice(0, 5000));
+      let lo = Infinity, hi = -Infinity;
+      for (const p of V.pts) { lo = Math.min(lo, p.z); hi = Math.max(hi, p.z); }
+      const t = Number(document.getElementById("verifyZmax").value) / 1000;
+      V.zmax = lo + (hi - lo) * t;
+      document.getElementById("verifyZmaxVal").textContent = V.zmax.toFixed(1);
+      renderVerify();
+    });
+    document.getElementById("verifyView3d").addEventListener("change", renderVerify);
+    document.getElementById("verifyChartMode").addEventListener("change", renderVerify);
+
+    // ═══════════ 브라우저 자체 테스트 (발표 시연용) ═══════════
+    document.getElementById("selfTestBtn").addEventListener("click", () => {
+      const out = [];
+      const T = (name, why, fn) => {
+        try { const detail = fn(); out.push(`PASS  ${name} — ${why}${detail ? ` [${detail}]` : ""}`); }
+        catch (e) { out.push(`FAIL  ${name} — ${why}: ${e.message}`); }
+      };
+      // 1) 왕복
+      T("왕복 (상수/2밴드/3밴드 ×1,000점)", "정변환·역변환이 서로 역함수인가", () => {
+        const profs = [vProfile([[0, 30]]),
+                       vProfile([[0, 15], [10, 15], [14, 35], [30, 35]]),
+                       vProfile([[0, 30], [8, 30], [12, 0], [20, 0], [24, -20], [30, -20]])];
+        let worst = 0, seed = 1;
+        const rand = () => (seed = seed * 16807 % 2147483647) / 2147483647;
+        for (const pr of profs) for (let i = 0; i < 1000; i++) {
+          const x = (rand() - 0.5) * 30, y = (rand() - 0.5) * 30, z = rand() * 30;
+          const r = Math.hypot(x, y);
+          const zw = vForward(z, r, pr, 1);
+          const th = pr.thetaAt(zw) * Math.PI / 180;
+          const inv = vInverse(x / Math.cos(th), y / Math.cos(th), zw, pr, 1);
+          worst = Math.max(worst, Math.abs(inv.x - x), Math.abs(inv.y - y), Math.abs(inv.z - z));
+        }
+        if (worst > 1e-9) throw new Error(`오차 ${worst.toExponential(2)}`);
+        return `최대 오차 ${worst.toExponential(1)}`;
+      });
+      // 2) 상수 = 고정각
+      T("상수 프로필 = 고정각 공식", "일반화가 기존 고정각을 특수경우로 포함하는가", () => {
+        const pr = vProfile([[0, 30]]);
+        const t = 30 * Math.PI / 180;
+        for (const [X, Y, Zw] of [[10, 5, 7], [-3, 8, 2], [0.5, 0, 20]]) {
+          const a = vInverse(X, Y, Zw, pr, 1);
+          const bx = X * Math.cos(t), by = Y * Math.cos(t),
+                bz = Zw - Math.hypot(X, Y) * Math.sin(t);
+          if (Math.abs(a.x - bx) + Math.abs(a.y - by) + Math.abs(a.z - bz) > 1e-12)
+            throw new Error("불일치");
+        }
+        return "3점 일치";
+      });
+      // 3) 합성 지지 케이스
+      T("합성 지지 3케이스", "지지 규칙(베드/적층/공중)이 문서와 같은가", () => {
+        const g1 = vParse("G1 X0 Y0 Z5 E0\nG1 X20 Y0 Z5 E1");
+        const p1 = vSample(g1.moves, 0.45);
+        const r1 = vSupport(p1, 0.3, 0.45);
+        if (r1.unsupportedPct !== 100) throw new Error(`공중선 ${r1.unsupportedPct}%`);
+        const g2 = vParse("G1 X0 Y0 Z5 E0\nG1 X20 Y0 Z5 E1\nG0 X0 Y0 Z5.3\nG1 X0 Y0 Z5.3 E1.0001\nG1 X20 Y0 Z5.3 E2");
+        const p2 = vSample(g2.moves, 0.45);
+        const r2 = vSupport(p2, 0.3, 0.45);
+        const second = p2.map((p, i) => p.z > 5.15 ? r2.sup[i] : true);
+        if (!second.every(Boolean)) throw new Error("적층선 미지지");
+        const g3 = vParse("G1 X0 Y0 Z0.3 E0\nG1 X20 Y0 Z0.3 E1");
+        const r3 = vSupport(vSample(g3.moves, 0.45), 0.3, 0.45);
+        if (r3.unsupportedPct !== 0) throw new Error(`첫층 ${r3.unsupportedPct}%`);
+        return "공중 100% / 적층 지지 / 첫층 베드";
+      });
+      // 4) 가역성 경계
+      T("가역성 경계 (c·r·s→1)", "해가 사라지는 조건이 이론과 같은가", () => {
+        // r=10, Δtan=tan40−tan10 ≈ 0.663 → w_min≈6.63. w=5 (위반) → 해 NaN 나와야
+        const bad = vProfile([[0, 10], [10, 10], [15, 40], [30, 40]]);  // s≈0.1326, r=10 → c·r·s≈1.33>1
+        const zw = vForward(12.0, 10.0, bad, 1);
+        // 위반 구간에 걸린 점: denom<0 → 구간 해 없음 → NaN 또는 구간 밖 해
+        const okWide = vProfile([[0, 10], [10, 10], [20, 40], [30, 40]]); // s≈0.066, c·r·s≈0.66<1
+        const zw2 = vForward(12.0, 10.0, okWide, 1);
+        if (isNaN(zw2)) throw new Error("정상 프로필에서 해 실패");
+        return `위반 프로필 해: ${isNaN(zw) ? "부재(NaN) — 예상대로" : "존재(경계 밖 구간에서)"} / 정상 프로필 해 존재`;
+      });
+      vSelfTest.hidden = false;
+      vSelfTest.textContent = out.join("\n");
+    });
+  </script>
+</body>
+</html>

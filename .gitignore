@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+
+# toolpath_check.py 가 실행할 때마다 남기는 임시 산점도
+# (보관할 결과 PNG 는 이미 추적 중이라 영향 없음)
+*_check.png
+
+# Local research checkouts and generated validation artifacts
+/work/
+/outputs/
+/results/
+/.pytest_cache/
