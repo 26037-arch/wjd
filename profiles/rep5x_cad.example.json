@@ -1,0 +1,20 @@
+{
+  "units": "mm",
+  "coordinate_frame": "common_home",
+  "status": "UNCALIBRATED",
+  "machine_origin": null,
+  "transforms": {
+    "H_T_C": null,
+    "C_T_B": null,
+    "B_T_N": null
+  },
+  "c_axis_local": [0, 0, 1],
+  "b_axis_local": [0, 1, 0],
+  "parts": {
+    "frame": "frame.stl",
+    "carriage": "carriage.stl",
+    "c_axis": "c_axis.stl",
+    "b_axis": "b_arm.stl",
+    "hotend": "hotend.stl"
+  }
+}

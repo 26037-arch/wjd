@@ -149,6 +149,14 @@ def builtin_mesh_check(mesh):
             "valid": finite and non_empty and volume > 0 and mesh.is_watertight}
 
 
+def align_upstream_volco_mesh(mesh, translation, voxel_size):
+    """Correct upstream mesh centers and remove its XY grid padding."""
+    half_voxel = voxel_size / 2
+    mesh.apply_translation([half_voxel - translation["x"],
+                            half_voxel - translation["y"], half_voxel])
+    return [half_voxel] * 3
+
+
 def validate_volco(gcode_path, original_mesh, output_dir, repo_path,
                    seed=0, voxel_size=0.1, timeout=300):
     repo = Path(repo_path) if repo_path else None
@@ -195,8 +203,11 @@ def validate_volco(gcode_path, original_mesh, output_dir, repo_path,
         translation = result.get("xy_translation_mm")
         if not translation:
             raise ValueError("VOLCO voxel translation not reported")
-        reconstruction.apply_translation([-translation["x"],
-                                          -translation["y"], 0.0])
+        # Upstream mesh.py places cube centers at i*h, while deposition tests
+        # centers at (i+0.5)*h.  Correct the export coordinates without touching
+        # the external checkout; this is independent of its XY padding.
+        center_correction = align_upstream_volco_mesh(
+            reconstruction, translation, voxel_size)
         aligned_stl = output_dir / "reconstruction_aligned.stl"
         reconstruction.export(aligned_stl)
         a = trimesh.sample.sample_surface(original_mesh, 1500, seed=seed)[0]
@@ -222,9 +233,51 @@ def validate_volco(gcode_path, original_mesh, output_dir, repo_path,
                 "reconstructed_stl": str(result["stl"]),
                 "aligned_reconstructed_stl": str(aligned_stl),
                 "xy_translation_removed_mm": translation,
+                "upstream_stl_center_correction_mm": center_correction,
                 "voxel_size_mm": voxel_size,
                 "step_size_mm": result.get("step_size_mm")}
     except (OSError, ValueError, subprocess.TimeoutExpired, ImportError) as exc:
         return {"backend": "volco", "available": True, "status": "ERROR",
                 "orientation_not_modeled": True, "git_commit": repository_commit(repo),
                 "error": str(exc)}
+
+
+def validate_volco_cartesian(*args, **kwargs):
+    """Explicit name for the historical, orientation-free upstream adapter."""
+    return validate_volco(*args, **kwargs)
+
+
+def validate_volco_oriented(gcode_path, output_dir, **kwargs):
+    """Run the repository's REP5X-aware spherical voxel extension."""
+    from tools.external.volco_oriented import simulate_gcode
+
+    try:
+        manifest = simulate_gcode(gcode_path, output_dir, **kwargs)
+        metrics = json.loads((Path(output_dir) / "metrics.json").read_text(
+            encoding="utf-8"))
+        return {"backend": "volco_oriented_extension", "status": "OK",
+                "orientation_not_modeled": False,
+                "cfd_applied": False, "manifest": str(Path(output_dir) / "manifest.json"),
+                "final_stl": str(Path(output_dir) / manifest["files"]["final_mesh"]),
+                "metrics": metrics}
+    except (OSError, ValueError, ImportError) as exc:
+        return {"backend": "volco_oriented_extension", "status": "ERROR",
+                "orientation_not_modeled": False, "cfd_applied": False,
+                "error": str(exc)}
+
+
+def validate_hybrid_deposition(gcode_path, output_dir, **kwargs):
+    """Do not claim a hybrid result until a validated local CFD kernel exists."""
+    from tools.external.cfd_backend import OpenFOAMLocalBackend
+
+    backend = OpenFOAMLocalBackend()
+    oriented = validate_volco_oriented(gcode_path, output_dir, **kwargs)
+    result = {"backend": "hybrid", "status": "NOT_AVAILABLE",
+            "cfd_applied": False, "volco_oriented": oriented,
+            "openfoam_solver_found_on_path": backend.status()["solver_found_on_path"],
+            "reason": "Existing OpenFOAM case is Cartesian-only and its local source/shape has not converged"}
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "hybrid_status.json").write_text(
+        json.dumps(result, indent=2), encoding="utf-8")
+    return result

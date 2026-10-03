@@ -3,7 +3,10 @@ import os
 import pytest
 
 from tools.external.validators import (
-    validate_admesh, validate_gcode_toolkit, validate_mage, validate_multi_axis,
+    validate_admesh,
+    validate_gcode_toolkit,
+    validate_mage,
+    validate_multi_axis,
 )
 from tools.run_random_validation import internal_gcode_check
 

@@ -1,0 +1,39 @@
+name: PLA_REQUIRES_CALIBRATION
+calibrated_for_target: false
+notes: "Fill with measurements for the exact filament and temperature history before physical validation."
+density:
+  value: null
+  unit: kg/m3
+  status: REQUIRES_CALIBRATION
+  source: null
+thermal_conductivity:
+  value: null
+  unit: W/(m K)
+  status: REQUIRES_CALIBRATION
+  source: null
+specific_heat:
+  value: null
+  unit: J/(kg K)
+  status: REQUIRES_CALIBRATION
+  source: null
+reference_temperature:
+  value: null
+  unit: degC
+  status: REQUIRES_CALIBRATION
+  source: null
+viscosity_model: CrossPowerLaw
+viscosity_parameters:
+  eta0_pa_s: null
+  tau_pa: null
+  high_shear_index: null
+  status: REQUIRES_CALIBRATION
+  source: null
+surface_tension:
+  value: null
+  unit: N/m
+  status: REQUIRES_CALIBRATION
+  source: null
+solidification:
+  model: null
+  status: REQUIRES_CALIBRATION
+  source: null

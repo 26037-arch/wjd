@@ -25,8 +25,14 @@ from conical.selector import select_cone
 from conical.test_models import generate_random_model
 from conical.toolpath import HotendProfile, check_support, sample_extrusions
 from tools.external.validators import (
-    builtin_mesh_check, unavailable, validate_admesh, validate_gcode_toolkit,
-    validate_mage, validate_multi_axis, validate_pymeshlab, validate_volco,
+    builtin_mesh_check,
+    unavailable,
+    validate_admesh,
+    validate_gcode_toolkit,
+    validate_mage,
+    validate_multi_axis,
+    validate_pymeshlab,
+    validate_volco,
 )
 
 
@@ -80,7 +86,8 @@ def support_metrics(items, layer_height):
     return result
 
 
-def run_angle(mesh, model_id, angle, direction, args, output_dir):
+def run_angle(mesh, model_id, angle, direction, args, output_dir,
+              run_physics=False, stl_path=None):
     key = f"{angle:g}_{direction}"
     gcode_path = output_dir / "gcode" / f"model_{model_id:05d}_{key}.gcode"
     result = {"angle_deg": angle, "direction": direction,
@@ -132,9 +139,26 @@ def run_angle(mesh, model_id, angle, direction, args, output_dir):
     result["geometry"] = {"volco":
         validate_volco(gcode_path, mesh, output_dir / "reconstructed" / f"model_{model_id:05d}_{key}",
                        args.volco_dir, seed=args.seed + model_id,
-                       voxel_size=args.volco_voxel_size)
+                       voxel_size=args.volco_voxel_size,
+                       timeout=args.volco_timeout)
         if args.geometry_validator == "volco"
         else unavailable("volco", "not selected", "NOT_SELECTED")}
+    if run_physics:
+        from tools.external.physics_cfd import validate_physics
+        physics_dir = output_dir / "physics" / f"model_{model_id:05d}_{key}"
+        result["geometry"]["physics_cfd"] = validate_physics(
+            gcode_path, stl_path, physics_dir,
+            args.physics_material, args.physics_window, args.physics_max_path_mm)
+        comparison = {"original_target_stl": str(stl_path),
+                      "gcode_path": str(gcode_path),
+                      "volco": result["geometry"]["volco"],
+                      "physics_cfd": result["geometry"]["physics_cfd"],
+                      "comparison_scope": "local CFD window; whole-target metrics unavailable"}
+        (physics_dir / "comparison.json").write_text(
+            json.dumps(clean(comparison), indent=2, allow_nan=False), encoding="utf-8")
+    else:
+        result["geometry"]["physics_cfd"] = unavailable(
+            "physics_cfd", "not selected", "NOT_SELECTED")
     if fatal:
         result["status"] = "KINEMATIC_FAIL"
     elif result["collision"]["internal"].get("collision_pct", 0) > 0:
@@ -237,7 +261,9 @@ def run_case(model_id, args, output_dir):
     except Exception as exc:
         case.update(status="SELECTOR_ERROR", error=str(exc))
         return case
-    chosen = run_angle(mesh, model_id, best["angle"], best["direction"], args, output_dir)
+    chosen = run_angle(mesh, model_id, best["angle"], best["direction"], args,
+                       output_dir, run_physics=bool(args.physics_validator),
+                       stl_path=stl_path)
     case["selected_angle_result"] = chosen
     case["status"] = chosen["status"]
     if args.angle_sweep:
@@ -260,6 +286,8 @@ def run_case(model_id, args, output_dir):
         chosen.get("kinematics", {}).get("external", {}).get("multi_axis_motion_planning")
         if args.collision_cross_validator else None,
         chosen.get("geometry", {}).get("volco") if args.geometry_validator else None]
+    if args.physics_validator:
+        requested.append(chosen.get("geometry", {}).get("physics_cfd"))
     case["requested_external_checks_complete"] = bool(
         requested and all(r and r.get("status") == "OK" for r in requested))
     # Neither candidate verifies REP5X head-head collision, and support still
@@ -291,6 +319,13 @@ def main(argv=None):
     p.add_argument("--geometry-validator", choices=["volco"])
     p.add_argument("--volco-dir", default=os.environ.get("VOLCO_DIR"))
     p.add_argument("--volco-voxel-size", type=float, default=0.1)
+    p.add_argument("--volco-timeout", type=float, default=300,
+                   help="upstream VOLCO subprocess timeout in seconds; raise for 0.0125 mm")
+    p.add_argument("--physics-validator", choices=["physics_cfd"])
+    p.add_argument("--physics-material", type=Path,
+                   default=ROOT / "materials" / "pla.example.yaml")
+    p.add_argument("--physics-window", default="auto")
+    p.add_argument("--physics-max-path-mm", type=float, default=2.0)
     p.add_argument("--angle-sweep", action="store_true")
     p.add_argument("--angle-step", type=int, default=4)
     p.add_argument("--angle-max", type=int, default=MAX_ANGLE_DEG)
@@ -304,6 +339,7 @@ def main(argv=None):
     mesh_external = Counter()
     gcode_external = Counter()
     geometry_external = Counter()
+    physics_external = Counter()
     disagreement = 0
     with (output / "cases.jsonl").open("w", encoding="utf-8") as stream:
         for model_id in range(args.count):
@@ -319,12 +355,15 @@ def main(argv=None):
                 "status", "NOT_REACHED")] += 1
             geometry_external[selected.get("geometry", {}).get("volco", {}).get(
                 "status", "NOT_REACHED")] += 1
+            physics_external[selected.get("geometry", {}).get("physics_cfd", {}).get(
+                "status", "NOT_REACHED")] += 1
             print(f"[{model_id+1}/{args.count}] {case['status']}", flush=True)
     summary = {"seed": args.seed, "count": args.count,
                "statuses": dict(statuses), "validator_disagreement_cases": disagreement,
                "pymeshlab_statuses": dict(mesh_external),
                "gcode_toolkit_statuses": dict(gcode_external),
                "volco_statuses": dict(geometry_external),
+               "physics_cfd_statuses": dict(physics_external),
                "external_validation_complete_cases": 0,
                "note": "No physical printing experiment was performed"}
     (output / "summary.json").write_text(json.dumps(clean(summary), ensure_ascii=False,

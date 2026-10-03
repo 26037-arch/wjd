@@ -14,6 +14,9 @@
   -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
 
   <style>
     :root {
@@ -76,6 +79,7 @@
     .sidebar-resizer::after { content: ""; position: absolute; inset: 0 -4px; }
     body.resizing-sidebar { cursor: col-resize; user-select: none; }
     #chart { width: 100%; height: 100vh; }
+    #rep5xScene { width: 100%; height: 100vh; }
     @media (max-width: 800px) {
       .app { grid-template-columns: 1fr; }
       .chart-wrap, #chart { min-height: 72vh; height: 72vh; }
@@ -132,6 +136,52 @@
 
       <!-- ───────── 모드 2: G-code 실행 시뮬레이터 (신규) ───────── -->
       <div id="gcodePanel" hidden>
+        <div class="field">
+          <label for="physicalView">표시 방식</label>
+          <select id="physicalView">
+            <option value="path">G-code 경로 (기존 Plotly)</option>
+            <option value="cartesian" disabled>VOLCO Cartesian (시간별 voxel 데이터 없음)</option>
+            <option value="oriented">VOLCO oriented 예측 + REP5X 3D</option>
+            <option value="hybrid" disabled>VOLCO + CFD (검증된 CFD 결과 없음)</option>
+          </select>
+          <div class="data-format">voxel 형상은 아래 시뮬레이션 파일을 불러와야 표시됩니다.
+            CFD 보정은 검증된 계산 결과가 있을 때만 표시합니다.</div>
+        </div>
+        <div class="field">
+          <label for="depositionFiles">예측 결과 파일 (manifest.json, events.json, frames.jsonl)</label>
+          <input id="depositionFiles" type="file" accept=".json,.jsonl" multiple />
+          <div id="depositionStatus" class="sim-stats">예측 결과를 선택하세요.</div>
+        </div>
+        <div class="field">
+          <label for="cadCalibration">REP5X CAD 보정 JSON (실측 공통 home 좌표)</label>
+          <input id="cadCalibration" type="file" accept=".json" />
+          <label for="cadParts">REP5X CAD 부품 STL (프레임, 캐리지, C축, B축, 핫엔드)</label>
+          <input id="cadParts" type="file" accept=".stl" multiple />
+          <div id="rep5xAssetStatus" class="sim-stats">UNCALIBRATED: CAD 미로드. 노즐 축만 표시하며 임의 관절 위치는 사용하지 않습니다.</div>
+        </div>
+        <div class="field">
+          <span class="field-title">3D 표시 항목</span>
+          <label class="check-row"><input id="showPhysicalOriginal" type="checkbox" checked /><span>원본 STL</span></label>
+          <label class="check-row"><input id="showPhysicalPath" type="checkbox" checked /><span>G-code 경로</span></label>
+          <label class="check-row"><input id="showRep5xMachine" type="checkbox" checked /><span>REP5X CAD 기계</span></label>
+          <label class="check-row"><input id="showNozzleAxis" type="checkbox" checked /><span>노즐 축</span></label>
+          <label class="check-row"><input id="showDeposition" type="checkbox" checked /><span>누적 VOLCO voxel</span></label>
+          <label class="check-row"><input type="checkbox" disabled /><span>VOLCO Cartesian (시간별 데이터 없음)</span></label>
+          <label class="check-row"><input type="checkbox" disabled /><span>CFD 보정 침착 (NOT_AVAILABLE)</span></label>
+        </div>
+        <div class="field">
+          <label for="motionSource">기계 자세</label>
+          <select id="motionSource"><option value="gcode">G-code 재생</option>
+            <option value="manual">수동 자세</option></select>
+          <div id="manualPose" hidden>
+            <label>X <input id="manualX" type="number" value="0" step="0.1" /> mm</label>
+            <label>Y <input id="manualY" type="number" value="0" step="0.1" /> mm</label>
+            <label>Z <input id="manualZ" type="number" value="0" step="0.1" /> mm</label>
+            <label>B <input id="manualB" type="number" value="0" step="1" /> °</label>
+            <label>C <input id="manualC" type="number" value="0" step="1" /> °</label>
+            <div id="manualReadout" class="sim-stats"></div>
+          </div>
+        </div>
         <div class="field">
           <label for="gcodeFile">G-code 파일 (.gcode)</label>
           <input id="gcodeFile" type="file" accept=".gcode,.gco,.g,.txt" />
@@ -252,6 +302,7 @@ conical_slice.py 출력(_conical.gcode / _open5x.gcode)을 그대로 읽습니�
     <div id="sidebarResizer" class="sidebar-resizer"></div>
     <section class="chart-wrap">
       <div id="chart"></div>
+      <div id="rep5xScene" hidden></div>
       <div id="verifyView" hidden style="padding:12px">
         <canvas id="verifyCanvas" width="900" height="520"
                 style="width:100%;background:#0e1428;border:1px solid var(--border);border-radius:10px"></canvas>
@@ -264,6 +315,8 @@ conical_slice.py 출력(_conical.gcode / _open5x.gcode)을 그대로 읽습니�
       </div>
     </section>
   </main>
+
+  <script src="rep5x_scene.js"></script>
 
   <script>
     "use strict";
@@ -310,6 +363,8 @@ conical_slice.py 출력(_conical.gcode / _open5x.gcode)을 그대로 읽습니�
     const gcodePanel = document.getElementById("gcodePanel");
     const verifyPanel = document.getElementById("verifyPanel");
     const verifyView = document.getElementById("verifyView");
+    const physicalView = document.getElementById("physicalView");
+    const sceneHost = document.getElementById("rep5xScene");
     let mode = "excel";
     function switchMode(m) {
       mode = m;
@@ -320,18 +375,22 @@ conical_slice.py 출력(_conical.gcode / _open5x.gcode)을 그대로 읽습니�
       gcodePanel.hidden = m !== "gcode";
       verifyPanel.hidden = m !== "verify";
       verifyView.hidden = m !== "verify";
-      chart.style.display = m === "verify" ? "none" : "";
+      const threeMode = m === "gcode" && physicalView.value === "oriented";
+      chart.style.display = m === "verify" || threeMode ? "none" : "";
+      sceneHost.hidden = !threeMode;
       if (m === "verify") {
         if (window.renderVerify) window.renderVerify();   // 검증 탭은 Canvas2D (CDN 불필요)
         return;
       }
-      Plotly.purge(chart);
+      if (!threeMode) Plotly.purge(chart);
       if (m === "excel") { drawEmptyPlot(); if (datasets.length) renderPlot(); }
+      else if (threeMode) { if (window.rep5xScene) window.rep5xScene.show(); renderSim(); }
       else { drawEmptyGcodePlot(); if (sim.moves.length) renderSim(); }
     }
     tabExcel.addEventListener("click", () => switchMode("excel"));
     tabGcode.addEventListener("click", () => switchMode("gcode"));
     tabVerify.addEventListener("click", () => switchMode("verify"));
+    physicalView.addEventListener("change", () => switchMode("gcode"));
 
     // ═══════════ 모드 1: Excel 표면 비교 (팀메 원본 로직 그대로) ═══════════
     const fileInput = document.getElementById("excelFiles");
@@ -616,12 +675,17 @@ conical_slice.py 출력(_conical.gcode / _open5x.gcode)을 그대로 읽습니�
 
     // conical_slice.py 의 메타/헤더에서 각도·방향·틸트 추출
     function parseGcodeText(text) {
-      const moves = []; const meta = { angle: null, direction: null, tilt: null };
-      let x=null,y=null,z=null,e=null,f=null,v=null,u=null;
+      const moves = []; const meta = { angle: null, direction: null, tilt: null, mode: null };
+      let x=null,y=null,z=null,f=null,v=null,u=null;
       let ePrev = 0, len = 0, exLen = 0;
+      let absoluteXYZ = true, absoluteE = true, units = 1;
       const lines = text.split(/\r?\n/);
       for (let li = 0; li < lines.length; li++) {
         const raw = lines[li];
+        const metadata = raw.match(/^;CONICAL_META\s+(.+)$/);
+        if (metadata) {
+          try { Object.assign(meta, JSON.parse(metadata[1])); } catch (_err) { /* old file */ }
+        }
         const cm = raw.match(/;\s*conical:\s*angle=([\d.]+)\s+direction=(\w+)/);
         if (cm) { meta.angle = Number(cm[1]); meta.direction = cm[2]; }
         const tm = raw.match(/tilt\s+([A-Z])=(-?[\d.]+)deg/);
@@ -631,15 +695,33 @@ conical_slice.py 출력(_conical.gcode / _open5x.gcode)을 그대로 읽습니�
         const words = code.match(/([A-Za-z])([-+]?[0-9]*\.?[0-9]+)/g);
         if (!words) continue;
         const g = words[0].toUpperCase();
-        if (g !== "G0" && g !== "G1") continue;
-        let nx=x, ny=y, nz=z, ne=null, nf=f, nv=v, nu=u;
-        for (const w of words.slice(1)) {
-          const k = w[0].toUpperCase(), val = Number(w.slice(1));
-          if (k==="X") nx=val; else if (k==="Y") ny=val; else if (k==="Z") nz=val;
-          else if (k==="E") ne=val; else if (k==="F") nf=val;
-          else if (k==="V"||k==="C") nv=val; else if (k==="U"||k==="B") nu=val;
+        const args = {};
+        for (const word of words.slice(1)) args[word[0].toUpperCase()] = Number(word.slice(1));
+        if (g === "G90") { absoluteXYZ = true; continue; }
+        if (g === "G91") { absoluteXYZ = false; continue; }
+        if (g === "M82") { absoluteE = true; continue; }
+        if (g === "M83") { absoluteE = false; continue; }
+        if (g === "G20") { units = 25.4; continue; }
+        if (g === "G21") { units = 1; continue; }
+        if (g === "G92") {
+          if (args.X !== undefined) x = args.X * units;
+          if (args.Y !== undefined) y = args.Y * units;
+          if (args.Z !== undefined) z = args.Z * units;
+          if (args.E !== undefined) ePrev = args.E * units;
+          if (args.B !== undefined) u = args.B;
+          if (args.C !== undefined) v = args.C;
+          continue;
         }
-        const extrude = ne !== null && ne > ePrev + 1e-9;
+        if (g !== "G0" && g !== "G1") continue;
+        const axis = (previous, value, scale) => value === undefined ? previous :
+          (absoluteXYZ ? value*scale : (previous || 0) + value*scale);
+        const nx=axis(x,args.X,units), ny=axis(y,args.Y,units),
+              nz=axis(z,args.Z,units);
+        const nv=axis(v,args.V ?? args.C,1), nu=axis(u,args.U ?? args.B,1);
+        const ne=args.E === undefined ? ePrev :
+          (absoluteE ? args.E*units : ePrev+args.E*units);
+        const nf=args.F === undefined ? f : args.F*units;
+        const extrude = ne > ePrev + 1e-9;
         if (nx!==null && ny!==null && nz!==null) {
           if (x!==null && y!==null && z!==null) {
             const d = Math.hypot(nx-x, ny-y, nz-z);
@@ -647,7 +729,7 @@ conical_slice.py 출력(_conical.gcode / _open5x.gcode)을 그대로 읽습니�
           }
           moves.push({ x:nx, y:ny, z:nz, f:nf, v:nv, u:nu, extrude, line: li+1 });
         }
-        x=nx; y=ny; z=nz; if (ne!==null) ePrev=ne; f=nf; v=nv; u=nu;
+        x=nx; y=ny; z=nz; ePrev=ne; f=nf; v=nv; u=nu;
       }
       meta.totalLen = len; meta.exLen = exLen;
       return { moves, meta };
@@ -677,6 +759,35 @@ conical_slice.py 출력(_conical.gcode / _open5x.gcode)을 그대로 읽습니�
     }
 
     function renderSim() {
+      if (mode === "gcode" && physicalView.value === "oriented") {
+        if (!window.rep5xScene) {
+          simStats.textContent = "Three.js를 불러오지 못했습니다.";
+          return;
+        }
+        if (document.getElementById("motionSource").value === "manual") {
+          const names = ["manualX", "manualY", "manualZ", "manualB", "manualC"];
+          const values = names.map(id => Number(document.getElementById(id).value));
+          if (values.every(Number.isFinite)) {
+            const d = window.rep5xScene.manualPose(...values);
+            const limits = Math.abs(values[3]) > 135 || Math.abs(values[4]) > 360;
+            document.getElementById("manualReadout").textContent =
+              `tip (${values.slice(0,3).map(v=>v.toFixed(2)).join(", ")}) mm\n` +
+              `d (${d.map(v=>v.toFixed(4)).join(", ")})\n` +
+              `B ${values[3]}°, C ${values[4]}°` +
+              (limits ? "\n경고: REP5X 설정 소프트리밋 초과" : "");
+          }
+          return;
+        }
+        const t = window.rep5xScene.duration * Number(progress.value) / 1000;
+        const pose = window.rep5xScene.setTime(t);
+        if (pose) {
+          simStats.textContent = `시간 ${t.toFixed(3)} / ${window.rep5xScene.duration.toFixed(3)} s\n` +
+            `G-code ${pose.line}행 · tip ${pose.position.map(v=>v.toFixed(3)).join(", ")} mm\n` +
+            `B ${pose.b.toFixed(2)}°, C ${pose.c.toFixed(2)}° (기록된 값 그대로)`;
+          progressValue.textContent = `${(Number(progress.value)/10).toFixed(0)}%`;
+        }
+        return;
+      }
       if ((!sim.moves.length && !sim.stl) || mode !== "gcode") return;
       const upto = Math.max(1, Math.round(sim.idx));
       const cm = colorMode.value;
@@ -794,6 +905,50 @@ conical_slice.py 출력(_conical.gcode / _open5x.gcode)을 그대로 읽습니�
         { responsive:true, displaylogo:false });
     }
 
+    document.getElementById("depositionFiles").addEventListener("change", async e => {
+      try {
+        const files = [...e.target.files];
+        const named = name => files.find(file => file.name === name);
+        const manifestFile = named("manifest.json");
+        if (!manifestFile) throw new Error("manifest.json을 선택하세요.");
+        const manifest = JSON.parse(await manifestFile.text());
+        const eventsFile = named(manifest.files?.events || "events.json");
+        const framesFile = named(manifest.files?.frames || "frames.jsonl");
+        if (!eventsFile || !framesFile)
+          throw new Error("manifest에 기록된 events.json과 frames.jsonl도 함께 선택하세요.");
+        const events = JSON.parse(await eventsFile.text());
+        const frames = (await framesFile.text()).split(/\r?\n/).filter(Boolean)
+          .map(line => JSON.parse(line));
+        window.rep5xScene.loadPrediction(manifest, events, frames);
+        sim.moves = events.map(event => ({line:event.line, x:event.end_position[0],
+          y:event.end_position[1], z:event.end_position[2], extrude:event.extruding,
+          v:event.end_c, u:event.end_b}));
+        sim.idx = sim.moves.length;
+        progress.value = "1000";
+        physicalView.value = "oriented";
+        switchMode("gcode");
+        setStatus(`예측 파일 ${frames.length.toLocaleString()} frame 로드됨`);
+      } catch (err) { setStatus(err.message || String(err), "error"); }
+    });
+
+    async function loadCadIfReady() {
+      const configFile = document.getElementById("cadCalibration").files[0];
+      const parts = [...document.getElementById("cadParts").files];
+      if (!configFile || !parts.length) return;
+      try {
+        await window.rep5xScene.loadCad(JSON.parse(await configFile.text()), parts);
+        renderSim();
+      } catch (err) { setStatus(err.message || String(err), "error"); }
+    }
+    document.getElementById("cadCalibration").addEventListener("change", loadCadIfReady);
+    document.getElementById("cadParts").addEventListener("change", loadCadIfReady);
+    document.getElementById("motionSource").addEventListener("change", e => {
+      stopPlay(); document.getElementById("manualPose").hidden = e.target.value !== "manual";
+      renderSim();
+    });
+    for (const id of ["manualX", "manualY", "manualZ", "manualB", "manualC"])
+      document.getElementById(id).addEventListener("input", renderSim);
+
     gcodeFile.addEventListener("change", async () => {
       const file = gcodeFile.files && gcodeFile.files[0];
       if (!file) return;
@@ -804,22 +959,38 @@ conical_slice.py 출력(_conical.gcode / _open5x.gcode)을 그대로 읽습니�
         if (!parsed.moves.length) throw new Error("G0/G1 이동을 찾지 못했습니다.");
         sim.moves = parsed.moves; sim.meta = parsed.meta;
         sim.hasV = parsed.moves.some(m => m.v !== null && m.v !== undefined);
-        sim.is5x = sim.hasV && parsed.meta.tilt !== null;
+        sim.is5x = parsed.meta.mode === "open5x" ||
+          (parsed.meta.mode !== "rep5x" && sim.hasV && parsed.meta.tilt !== null);
         // G-code 메타의 각도/방향을 입력칸에 미리 채움 (이후엔 입력칸이 기준)
         if (parsed.meta.angle !== null) angleManual.value = parsed.meta.angle;
         if (parsed.meta.direction) dirManual.value = parsed.meta.direction;
         sim.idx = parsed.moves.length;
         progress.value = 1000;
         setStatus(`${file.name}: 이동 ${parsed.moves.length.toLocaleString()}개` +
-                  (sim.is5x ? " (Open5x 5축)" : " (3축)"));
+                  (sim.is5x ? " (Open5x 5축)" :
+                    parsed.meta.mode === "rep5x" ? " (REP5X RTCP)" : " (3축)"));
         renderSim();
       } catch (err) { setStatus(err instanceof Error ? err.message : String(err), "error"); }
     });
 
     // 재생 루프
     let rafId = null;
-    function tick() {
+    let lastPlaybackTimestamp = null;
+    function tick(timestamp) {
       if (!sim.playing) return;
+      if (physicalView.value === "oriented" && window.rep5xScene?.ready) {
+        const elapsed = lastPlaybackTimestamp === null ? 0 :
+          Math.max(0, (timestamp-lastPlaybackTimestamp)/1000);
+        lastPlaybackTimestamp = timestamp;
+        const duration = window.rep5xScene.duration;
+        const next = Math.min(1000, Number(progress.value) +
+          (duration > 0 ? elapsed * Number(playSpeed.value)/60 * 1000/duration : 1000));
+        progress.value = String(next);
+        renderSim();
+        if (next >= 1000) { stopPlay(); return; }
+        rafId = requestAnimationFrame(tick);
+        return;
+      }
       sim.idx += Number(playSpeed.value) / 10;
       if (sim.idx >= sim.moves.length) { sim.idx = sim.moves.length; stopPlay(); }
       progress.value = String(Math.round(sim.idx / sim.moves.length * 1000));
@@ -827,6 +998,12 @@ conical_slice.py 출력(_conical.gcode / _open5x.gcode)을 그대로 읽습니�
       rafId = requestAnimationFrame(tick);
     }
     function startPlay() {
+      if (physicalView.value === "oriented" && window.rep5xScene?.ready) {
+        if (Number(progress.value) >= 1000) progress.value = "0";
+        lastPlaybackTimestamp = null;
+        sim.playing = true; playBtn.textContent = "⏸ 정지";
+        rafId = requestAnimationFrame(tick); return;
+      }
       if (!sim.moves.length) return;
       if (sim.idx >= sim.moves.length) sim.idx = 1;   // 끝이면 처음부터
       sim.playing = true; playBtn.textContent = "⏸ 정지"; playBtn.classList.add("playing");
@@ -834,6 +1011,7 @@ conical_slice.py 출력(_conical.gcode / _open5x.gcode)을 그대로 읽습니�
     }
     function stopPlay() {
       sim.playing = false; playBtn.textContent = "▶ 재생"; playBtn.classList.remove("playing");
+      lastPlaybackTimestamp = null;
       if (rafId) cancelAnimationFrame(rafId);
     }
     playBtn.addEventListener("click", () => sim.playing ? stopPlay() : startPlay());
@@ -854,6 +1032,7 @@ conical_slice.py 출력(_conical.gcode / _open5x.gcode)을 그대로 읽습니�
       try {
         setStatus(`${file.name} (STL) 읽는 중...`);
         sim.stl = parseSTL(await file.arrayBuffer());
+        if (window.rep5xScene) window.rep5xScene.loadOriginal(sim.stl);
         setStatus(`${file.name}: 삼각형 ${sim.stl.nTri.toLocaleString()}개` +
                   (sim.moves.length ? "" : " (G-code 없이 모델만 표시)"));
         if (!sim.moves.length) sim.idx = 1;

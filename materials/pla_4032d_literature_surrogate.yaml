@@ -1,0 +1,43 @@
+name: PLA_4032D_LITERATURE_SURROGATE
+calibrated_for_target: false
+notes: >-
+  Numerical demonstration only. Density and rheology come from different
+  publications and are not measurements of the actual filament. The CFD is
+  isothermal; zero surface tension is an explicit omission, not a PLA value.
+density:
+  value: 1220
+  unit: kg/m3
+  status: LITERATURE_REFERENCE_NOT_TARGET_CALIBRATED
+  source: https://www.mdpi.com/2305-7084/7/1/1
+thermal_conductivity:
+  value: 0.13
+  unit: W/(m K)
+  status: LITERATURE_REFERENCE_NOT_USED_IN_ISOTHERMAL_SOLVER
+  source: https://www.mdpi.com/2305-7084/7/1/1
+specific_heat:
+  value: 1800
+  unit: J/(kg K)
+  status: LITERATURE_REFERENCE_NOT_USED_IN_ISOTHERMAL_SOLVER
+  source: https://www.mdpi.com/2305-7084/7/1/1
+reference_temperature:
+  value: 160
+  unit: degC
+  status: LITERATURE_RHEOLOGY_REFERENCE_NOT_GCODE_TEMPERATURE
+  source: https://onlinelibrary.wiley.com/doi/10.1002/mame.202500204
+viscosity_model: CrossPowerLaw
+viscosity_parameters:
+  eta0_pa_s: 3505
+  tau_pa: 410000
+  high_shear_index: 0.17
+  status: LITERATURE_4032D_FILAMENT_NOT_TARGET_CALIBRATED
+  source: https://onlinelibrary.wiley.com/doi/10.1002/mame.202500204
+  note: "OpenFOAM n = 1 - published Cross-WLF high-shear index at the reference temperature."
+surface_tension:
+  value: 0
+  unit: N/m
+  status: OMITTED_FOR_NUMERICAL_DEMONSTRATION_NOT_A_PLA_PROPERTY
+  source: null
+solidification:
+  model: null
+  status: NOT_IMPLEMENTED
+  source: null

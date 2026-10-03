@@ -18,6 +18,11 @@ pip install -r requirements.txt
 명령으로 내부 기준선을 실행할 수 있다. 외부 검증기는 별도 설치해야 하며,
 REP5X 충돌과 물리 출력 가능성의 독립 검증은 아직 완료되지 않았다.
 
+REP5X G-code의 B/C 방향을 반영한 voxel 침적 재구성과 시간별 재생 파일은
+[`docs/deposition_simulation.md`](docs/deposition_simulation.md)를 참고한다.
+`python tools/run_deposition_sim.py input.gcode --output-dir results/deposition/input`
+으로 실행한다. 이 결과는 수치 예측이며 CFD나 실물 출력 검증 결과가 아니다.
+
 ## 실행
 
 ```

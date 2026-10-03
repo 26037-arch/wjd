@@ -1,10 +1,11 @@
-import trimesh
-import pytest
 from types import SimpleNamespace
 
+import pytest
+import trimesh
+
 from conical.test_models import box
-from tools.external.validators import builtin_mesh_check, validate_pymeshlab
 from tools import run_random_validation as runner
+from tools.external.validators import builtin_mesh_check, validate_pymeshlab
 
 
 def test_closed_box_and_open_box(tmp_path):

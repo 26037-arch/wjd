@@ -1,7 +1,7 @@
 """Run upstream VOLCO in a bounded subprocess, using upstream run_simulation."""
 
-import json
 import contextlib
+import json
 import math
 import re
 import sys
@@ -23,7 +23,7 @@ def main():
             continue
         vals = {k.upper(): float(v) for k, v in
                 re.findall(r"([XYZEF])([-+]?\d*\.?\d+)", line, re.I)}
-        new = [vals.get(k, old) for k, old in zip("XYZE", pos)]
+        new = [vals.get(k, old) for k, old in zip("XYZE", pos, strict=False)]
         if new[3] > pos[3]:
             distance = math.dist(pos[:3], new[:3])
             if distance <= 0:

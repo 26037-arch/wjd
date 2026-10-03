@@ -66,6 +66,6 @@ def parse(lines):
 
 
 def write(items, path):
-    with open(path, "w") as fh:
+    with open(path, "w", encoding="utf-8") as fh:
         for kind, payload in items:
             fh.write((payload.to_line() if kind == "move" else payload) + "\n")
