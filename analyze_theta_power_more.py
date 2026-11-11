@@ -367,8 +367,10 @@ def plot_selector(rows, path):
                   color=INK)
     ax.set_ylabel(L("Δ toolpath overhang vs current J (%p)",
                     "현재 J 대비 툴패스 오버행 증감 (%p)"), color=INK)
-    ax.set_title(L(f"Shipping selector, {len(rows)} models — above 0 = worse output",
-                   f"출하 선택기 · 모델 {len(rows)}개 — 0 위 = 출력 나빠짐"),
+    ax.set_title(L(f"Shipping selector, {len(rows)} models — above 0 = worse output. "
+                     "Higher orders sit lower only because they cut the angle less",
+                   f"출하 선택기 · 모델 {len(rows)}개 — 0 위 = 출력 나빠짐. "
+                     "고차가 낮은 건 각도를 덜 줄여서다(같은 각도 비교는 후회 그림)"),
                  fontsize=10, color=INK, loc="left")
     ax.legend(frameon=False, fontsize=8, ncol=4, loc="upper left")
     fig.tight_layout()
